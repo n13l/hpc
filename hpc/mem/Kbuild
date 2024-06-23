@@ -1,0 +1,1 @@
+obj-y += alloc.o block.o page.o mm.o pool.o vm.o
