@@ -1,8 +1,33 @@
+/*
+ * The MIT License (MIT)         Copyright (c) 2017 Daniel Kubec <niel@rtfm.cz> 
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"),to deal
+ * in the Software without restriction, including without limitation the rights 
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+#ifndef __HPC_BITS_H__
+#define __HPC_BITS_H__
+
 #include <hpc/compiler.h>
 
 /* Next Largest Power of 2 */
-unsigned int
-nlpo2(register unsigned int x)
+static inline unsigned int
+bits_nlpo2(register unsigned int x)
 {
         x |= (x >> 1);
         x |= (x >> 2);
@@ -13,8 +38,8 @@ nlpo2(register unsigned int x)
 }
 
 /* Most Significant 1 Bit */
-unsigned int
-msb32(register unsigned int x)
+static inline unsigned int
+bits_msb32(register unsigned int x)
 {
         x |= (x >> 1);
         x |= (x >> 2);
@@ -25,39 +50,39 @@ msb32(register unsigned int x)
 }
 
 /* Trailing Zero Count */
-unsigned int
-tzc(register int x)
+static inline int unsigned int
+bits_tzc(register int x)
 {
         return(ones((x & -x) - 1));
 }
 
-int
-bitselect(int cond, int a, int b)
+static inline int
+bits_select(int cond, int a, int b)
 {
     return (a& -cond) | (b & ~(-cond)); 
 }
 
-u32
-u32_is_pow2(u32 x)
+static inline u32
+bits_u32_is_pow2(u32 x)
 {
 	return (x && !(x & (x - 1)));
 }
 
-int
-u32_has_zerobyte(u32 u32)
+static inline int
+bits_u32_has_zerobyte(u32 u32)
 {
 	return ~((((u32 & 0x7F7F7F7F) + 0x7F7F7F7F) | u32) | 0x7F7F7F7F);
 }
 
-int
-int_cond_inc(const int a, const int b, const int c, int x)
+static inline int
+bits_int_cond_inc(const int a, const int b, const int c, int x)
 {
 	x += (( b - a ) >> 31) & C;
 	return x;
 }
 
-int
-int_cond_inc2(const int a, const int b, const int c, int x)
+static inline int
+bits_int_cond_inc2(const int a, const int b, const int c, int x)
 {
 	x += -( a > b ) & c;
 	return x;
@@ -97,8 +122,8 @@ int_cond_inc2(const int a, const int b, const int c, int x)
  * https://arxiv.org/pdf/1602.06426.pdf
  */
 
-u64
-next_dyck_word(u64 w) {
+static inline u64
+bits_next_dyck_word(u64 w) {
 	u64 a = w & −w;
 	u64 b = w + a;
 	u64 c = w ^ b;
@@ -106,3 +131,5 @@ next_dyck_word(u64 w) {
 	c = ((c * c − 1) & 0xaaaaaaaaaaaaaaaa ) | b ;
 	return c;
 }
+
+#endif
