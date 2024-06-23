@@ -13,12 +13,6 @@
 [submodule "vendor/bats-file"]
 	path = vendor/bats-file
 	url = git@github.com:n13l/bats-file.git
-[submodule "hpc"]
-	path = hpc
-	url = git@github.com:n13l/hpc-base.git
-[submodule "test/hpc"]
-	path = test/hpc
-	url = git@github.com:n13l/hpc-test.git
 [submodule "vendor/userspace-rcu"]
 	path = vendor/userspace-rcu
 	url = git@github.com:n13l/userspace-rcu.git
