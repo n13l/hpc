@@ -1,11 +1,10 @@
-#define CATCH_CONFIG_RUNNER
-#include <catch2/catch.hpp>
-#include <sys/compiler.h>
-#include <sys/log.h>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/internal/catch_clara.hpp>
+#include <catch2/catch_session.hpp>
+#include <string>
 
-#include <crypto/algorithm.h>
-#include <crypto/iana.h>
-#include <crypto/ecc.h>
+#include <hpc/compiler.h>
+#include <hpc/log.h>
 
 static auto opt_log_verb = 0;
 static auto opt_log_file = std::string{};
@@ -35,10 +34,8 @@ disableLogging(void)
 int
 main(int argc, char* argv[])
 {
-	crypto_init_algorithms();
-
 	Catch::Session session;
-	using namespace Catch::clara;
+	using namespace Catch::Clara;
 	auto cli = session.cli() |
 	  Opt(opt_log_verb, "log-verbose")["-g"]["--log-verbose"]("verbosity") |
 	  Opt(opt_log_file, "log-file")["-F"]["--log-file"]("log file");
@@ -47,6 +44,6 @@ main(int argc, char* argv[])
 	int rv = session.applyCommandLine(argc,argv);
 	if( rv != 0 )
 		return rv;
-	enableLogging();
+	//enableLogging();
 	return session.run();
 }
