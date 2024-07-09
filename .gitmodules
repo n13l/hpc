@@ -16,3 +16,6 @@
 [submodule "vendor/userspace-rcu"]
 	path = vendor/userspace-rcu
 	url = git@github.com:n13l/userspace-rcu.git
+[submodule "vendor/kbuild"]
+	path = vendor/kbuild
+	url = git@github.com:n13l/kbuild.git
