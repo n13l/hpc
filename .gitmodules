@@ -1,6 +1,3 @@
-[submodule "vendor/build"]
-	path = vendor/build
-	url = git@github.com:n13l/build.git
 [submodule "vendor/catch2"]
 	path = vendor/catch2
 	url = git@github.com:n13l/Catch2.git
