@@ -36,14 +36,13 @@ config SRCTREE
 	string 
 	option env="srctree"
 
-menu "Build Options"
-
 menu "Architecture options"
 source "arch/$SRCARCH/Kconfig"
 source "arch/Kconfig"
 endmenu
 
+menu "Build options"
 source "scripts/Kconfig.compiler"
-source "scripts/Kconfig.modules"
 source "scripts/Kconfig.debug"
 endmenu
+
