@@ -1,7 +1,6 @@
 #include <hpc/compiler.h>
 #include <hpc/cpu.h>
-#include <hpc/list/slink.h>
-#include <hpc/list.h>
+#include <hpc/slist.h>
 #include <mem/alloc.h>
 #include <mem/pool.h>
 	

@@ -262,14 +262,13 @@ __log_asynch_safe_atomic_vprintf(struct log_ctx *c, const char *fmt, va_list a)
 {
 	char msg[PIPE_BUF];
 	int sz = do_log_hdr_parse(c, msg, PIPE_BUF - 4);
-	char *text, *p = msg + sz;
+	char *p = msg + sz;
 
 	va_list args;
 	va_copy(args, a);
 	sz += vsnprintf(p, PIPE_BUF - sz - 2, fmt, args);
 	va_end(args);
 
-	text = p;
 	p = msg + sz; *p++ = '\n'; *p++ = 0; sz += 1;
 	if (log_msg_handler)
 		log_msg_handler(msg, sz);

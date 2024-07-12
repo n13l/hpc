@@ -1,1 +1,3 @@
 obj-y += io.o
+subdir-y += mem
+subdir-$(CONFIG_LOGGING) += log
