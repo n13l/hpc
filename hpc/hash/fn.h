@@ -91,11 +91,7 @@ hash_u32_bernstein(u8 *key, u32 len, u32 level)
 static inline unsigned long
 hash_ptr(void *ptr, unsigned int bits)
 {
-#if CPU_ARCH_BITS == 32
-	return (unsigned long)hash_u32((u32)ptr, bits);
-#elif CPU_ARCH_BITS == 64
 	return (unsigned long)hash_u64((u64)ptr, bits);
-#endif
 }
 
 static inline unsigned long long

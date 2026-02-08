@@ -1,0 +1,77 @@
+# hpc unit selftests.
+#
+# Sources drop the test_ prefix (the units/ directory already says "test");
+# the built binaries keep it, as the shared test runner discovers unit
+# executables via the units/test_* glob. The multi-object form maps each
+# test_<name> binary to its <name>.o source.
+cmockatest-$(CONFIG_CMOCKA) := test_sort test_slab test_slab_cache test_queue \
+			       test_rbtree test_hashtable test_hashtable_cache \
+			       test_measure test_conf
+
+# The lockless container variants are units of their own, built only for an RCU
+# build: they call liburcu directly (read-side sections, grace periods,
+# call_rcu()) and the API they test is not compiled at all without CONFIG_RCU.
+# Nothing in them is #ifdef'd and nothing skips - the gate is here.
+#
+# The two _stress units are the same containers driven for real: threaded, with
+# an expiring slab cache underneath and the arena growing and shrinking while
+# lockless readers walk it (see stress_util.h). They are units like the rest -
+# `make check` runs them - and are sized to stay well under a second so they can
+# also be run under the sanitizer and valgrind profiles; HPC_STRESS_SCALE=<n>
+# in the environment multiplies the work for a soak run.
+rcutest-$(CONFIG_RCU) := test_queue_rcu test_rbtree_rcu test_hashtable_rcu \
+			 test_slab_rcu test_hashtable_rcu_stress \
+			 test_rbtree_rcu_stress
+cmockatest-$(CONFIG_CMOCKA) += $(rcutest-y)
+
+test_sort-y            := sort.o
+test_slab-y            := slab.o
+test_slab_cache-y      := slab_cache.o
+test_queue-y           := queue.o
+test_rbtree-y          := rbtree.o
+test_hashtable-y       := hashtable.o
+test_hashtable_cache-y := hashtable_cache.o
+test_measure-y         := measure.o
+test_conf-y            := conf.o
+test_slab_rcu-y        := slab_rcu.o
+test_queue_rcu-y       := queue_rcu.o
+test_rbtree_rcu-y      := rbtree_rcu.o
+test_hashtable_rcu-y   := hashtable_rcu.o
+test_hashtable_rcu_stress-y := hashtable_rcu_stress.o
+test_rbtree_rcu_stress-y    := rbtree_rcu_stress.o
+
+CMOCKA_CFLAGS = -I$(srctree)/hpc
+
+# liburcu goes on the link line of the RCU units only; $(URCU_LIBS) is defined
+# by the shared fragment (empty when CONFIG_RCU is off, in which case these
+# binaries are not built either).
+include $(srctree)/vendor/Kbuild.urcu
+
+# The containers are header-only, but their headers log: mem's debug calls,
+# and with CONFIG_TRACE on, the trace calls in <mem/slab.h> and friends are
+# real calls too, so every unit links the log archive when CONFIG_LOGGING is
+# on (the variable is empty otherwise, and the calls compile away with it).
+logobj-$(CONFIG_LOGGING) := hpc/log/built-in.o
+
+CMOCKA_LIBS_test_sort            = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_slab            = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_slab_cache      = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_queue           = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_rbtree          = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_hashtable       = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_hashtable_cache = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_measure         = hpc/built-in.o $(logobj-y)
+# <hpc/conf.h> is compiled code that allocates through hpc's mm, so its unit
+# also needs the conf and mem archives.
+CMOCKA_LIBS_test_conf            = hpc/conf/built-in.o hpc/mem/built-in.o \
+				   $(logobj-y) hpc/built-in.o
+# test_slab_rcu is threaded: it races readers against a shrink, so it needs
+# pthreads on top of liburcu (which $(URCU_LIBS) already carries -pthread for).
+CMOCKA_LIBS_test_slab_rcu        = hpc/built-in.o $(logobj-y) $(URCU_LIBS)
+CMOCKA_LIBS_test_queue_rcu       = hpc/built-in.o $(logobj-y) $(URCU_LIBS)
+CMOCKA_LIBS_test_rbtree_rcu      = hpc/built-in.o $(logobj-y) $(URCU_LIBS)
+CMOCKA_LIBS_test_hashtable_rcu   = hpc/built-in.o $(logobj-y) $(URCU_LIBS)
+# The stress units are threaded the same way, and additionally wait for grace
+# periods on the writer side (synchronize_rcu).
+CMOCKA_LIBS_test_hashtable_rcu_stress = hpc/built-in.o $(logobj-y) $(URCU_LIBS)
+CMOCKA_LIBS_test_rbtree_rcu_stress    = hpc/built-in.o $(logobj-y) $(URCU_LIBS)
