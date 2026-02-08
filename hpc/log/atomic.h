@@ -39,6 +39,7 @@
 #include <hpc/compiler.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <errno.h>
 #include <time.h>
 
@@ -106,7 +107,15 @@ struct log_ctx {
 	}; ctx; \
 })
 
-#ifndef CONFIG_LOG_SILENT
+/*
+ * CONFIG_LOGGING is what compiles hpc/log/ (see hpc/Kbuild), so it is also what
+ * decides whether these expand to a call: with logging off the writer and the
+ * log_silent/log_verbose gates it defines do not exist, and a caller that still
+ * emitted the call would not link. CONFIG_SILENT is a subset - it depends on
+ * !LOGGING - so it needs no gate of its own here.
+ */
+
+#ifdef CONFIG_LOGGING
 
 #define __log_atomic_printf(type, require, fmt, ...) \
 ({ \
@@ -126,8 +135,22 @@ struct log_ctx {
 
 #else
 
-#define __log_atomic_printf(type, require, fmt, ...)
-#define __log_atomic_write_b16(type, require, prefix, indent, buf, size)
+/*
+ * Nothing is emitted, but the arguments still have to be seen by the compiler:
+ * an unreferenced `if (0)` call keeps the printf format checking and keeps
+ * variables that only a log call reads from warning as unused.
+ */
+
+#define __log_atomic_printf(type, require, fmt, ...) \
+({ \
+  if (0) \
+    printf(fmt, ## __VA_ARGS__); \
+})
+
+#define __log_atomic_write_b16(type, require, prefix, indent, buf, size) \
+({ \
+  (void)(prefix); (void)(indent); (void)(buf); (void)(size); \
+})
 
 #endif
 

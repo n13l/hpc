@@ -224,7 +224,7 @@ enum log_msg {
 #define debug4_buf(prefix, indent, buf, size) \
   __log_atomic_write_b16(LOG_DEBUG4, 4, prefix, indent, buf, size)
 
-#ifdef CONFIG_LOG_TRACE
+#ifdef CONFIG_TRACE
 
 /*
  * trace1()
@@ -354,7 +354,9 @@ enum log_msg {
 
 typedef void (*custom_log_fn)(char *msg, unsigned int len);
 
-#ifndef CONFIG_LOG_SILENT
+/* Defined by hpc/log/write.c, which only CONFIG_LOGGING builds. */
+
+#ifdef CONFIG_LOGGING
 
 void
 log_name(const char *name);
@@ -376,18 +378,30 @@ log_getcaps(void);
 
 #else
 
-#define log_name(name)
-#define log_open(file)
-#define log_close(...)
-#define log_setcaps(caps)
-#define log_set_handler(fn)
-#define log_get_caps(...) {( 0; )}
+#define log_name(name)        ((void)(name))
+#define log_open(file)        ((void)(file))
+#define log_close(...)        ((void)0)
+#define log_setcaps(caps)     ((void)(caps))
+#define log_set_handler(fn)   ((void)(fn))
+#define log_getcaps(...)      (0)
 
 #endif
 
+/*
+ * The knobs. Defined by hpc/log/write.c under CONFIG_LOGGING; without it
+ * there is no logger for them to gate, but the code that sets and reads them
+ * still has to compile and link, so each unit gets a private stub instead.
+ * That they stop being shared does not matter: nothing observes them.
+ */
+#ifdef CONFIG_LOGGING
 extern int log_verbose;
 extern int log_silent;
 extern int log_append;
+#else
+static int log_verbose _unused;
+static int log_silent _unused;
+static int log_append _unused;
+#endif
 
 __END_DECLS
 

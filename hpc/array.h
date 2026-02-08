@@ -46,6 +46,19 @@
  * ensuring data accuracy and reliability before any further processing.
  */
 
+#ifdef __clang__
+#define STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
+	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
+	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"")
+#define STREAMLINED_ARRAY_DIAGNOSTIC_POP \
+	_Pragma("clang diagnostic pop")
+#else
+#define STREAMLINED_ARRAY_DIAGNOSTIC_PUSH
+#define STREAMLINED_ARRAY_DIAGNOSTIC_POP
+#endif
+
 /*
  * The ARRAY_SIZE macro calculates the number of elements in a given array.
  *
@@ -117,8 +130,8 @@
 	((1 << ARRAY_BITS_1B_ARGS(type,__VA_ARGS__)) - 1)
 
 /*
- * The DEFINE_CONST_ARRAY_STREAMLINED macro creates a fixed-size, power-of-two,
- * zero-based array with a specified anchor element.
+ * The DEFINE_ARRAY macro creates a fixed-size, power-of-two, zero-based
+ * array with a specified anchor element.
  * This allows for fast, branchless access to the array elements.
  *
  * - type: The data type of the elements in the array.
@@ -133,25 +146,94 @@
  * Requires GNU Extensions (-std=gnu99)
  */
 
-#define DEFINE_CONST_ARRAY_STREAMLINED(type, name, anchor, ...) \
+#define DEFINE_ARRAY(type, name, anchor, ...) \
 	const u32 name##_size = ARRAY_SIZE_0B_ARGS(type,__VA_ARGS__);\
 	const u32 name##_mask = ARRAY_MASK_0B_ARGS(type,__VA_ARGS__);\
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	type name[1 << (ARRAY_BITS_0B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
 		[0 ... (ARRAY_MASK_0B_ARGS(type,__VA_ARGS__))] = \
 		anchor, __VA_ARGS__ \
 	}; \
-	_Pragma("clang diagnostic pop") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP \
 
-#define DEFINE_CONST_ARRAY(type, name, anchor, ...) \
-	DEFINE_CONST_ARRAY_STREAMLINED(type, name, anchor, __VA_ARGS__)
+/*
+ * The DECLARE_ARRAY macro is used to declare an external
+ * streamlined array variable.
+ *
+ * - type: The data type of the elements in the array
+ * - name: The name of the array variable.
+ */
 
-#define DEFINE_ARRAY_STREAMLINED(type, name, anchor, bits) \
-	DEFINE_CONST_ARRAY_STREAMLINED(type, name, anchor, [1<<bits] = anchor)
+#define DECLARE_ARRAY(type, name) \
+	extern const u32 name##_mask; \
+	extern const u32 name##_size; \
+	extern type name[]; \
+	static inline u32 name##_verify(u32 index) { \
+		return index_pow2_ob(index, name##_mask); \
+	} \
+	static inline type name##_at(u32 index) { \
+		return name[name##_verify(index)]; \
+	}
+
+/*
+ * The STATIC_ARRAY macro creates a static, fixed-size, power-of-two,
+ * zero-based array with a specified anchor element.
+ *
+ * This allows for fast, branchless access to the array elements, while
+ * keeping the scope of the array limited to the current source file.
+ *
+ * - type: The data type of the elements in the array.
+ * - name: The name of the array variable.
+ * - anchor: The default element.
+ * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
+ */
+
+#define STATIC_ARRAY(type, name, anchor, ...) \
+	static const u32 name##_size = ARRAY_SIZE_0B_ARGS(type,__VA_ARGS__);\
+	static const u32 name##_mask = ARRAY_MASK_0B_ARGS(type,__VA_ARGS__);\
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
+	static type name[1 << (ARRAY_BITS_0B_ARGS(type,__VA_ARGS__))] \
+		__attribute__ ((aligned(16))) = { \
+		[0 ... (ARRAY_MASK_0B_ARGS(type,__VA_ARGS__))] = \
+		anchor, __VA_ARGS__ \
+	}; \
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP \
+	static inline u32 name##_verify(u32 index) { \
+		return index_pow2_ob(index, name##_mask); \
+	} \
+	static inline type name##_at(u32 index) { \
+		return name[name##_verify(index)]; \
+	} \
+
+/*
+ * The DEFINE_ARRAY_STREAMLINED macro creates a fixed-size,
+ * power-of-two, one-based array with a specified anchor element.
+ * This allows for fast, branchless access to the array elements.
+ *
+ * - type: The data type of the elements in the array.
+ * - name: The name of the array variable.
+ * - anchor: The default element.
+ * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
+ *
+ * O(1) time branchless access for zero-based arrays.
+ *
+ * If the value in it has side effects, the side effects happen only once, not
+ * for each initialized field by the range initializer.
+ * Requires GNU Extensions (-std=gnu99)
+ */
+
+#define DEFINE_ARRAY_STREAMLINED(type, name, anchor, ...) \
+	const u32 name##_size = ARRAY_SIZE_1B_ARGS(type,__VA_ARGS__);\
+	const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
+	const u32 name##_msb = ~name##_mask; \
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
+	type name[1 << (ARRAY_BITS_1B_ARGS(type,__VA_ARGS__))] \
+		__attribute__ ((aligned(16))) = { \
+		[0 ... (ARRAY_MASK_1B_ARGS(type,__VA_ARGS__))] = \
+		anchor, __VA_ARGS__ \
+	}; \
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP \
 
 /*
  * The DECLARE_ARRAY_STREAMLINED macro is used to declare an external
@@ -161,126 +243,24 @@
  * - name: The name of the array variable.
  */
 
-#define DECLARE_CONST_ARRAY_STREAMLINED(type, name) \
-	extern const u32 name##_mask; \
-	extern const u32 name##_size; \
-	extern type name[]; \
-	static inline u32 name##_verify(u32 index) { \
-		return verify_0bi32pow2(index, name##_mask); \
-	} \
-	static inline type name##_at(u32 index) { \
-		return name[name##_verify(index)]; \
-	}
-
-#define DECLARE_CONST_ARRAY(type, name) \
-	DECLARE_CONST_ARRAY_STREAMLINED(type, name)
-
-/*
- * The STATIC_ARRAY_STREAMLINED macro creates a static, fixed-size, power-of-two,
- * zero-based array with a specified anchor element.
- *
- * This allows for fast, branchless access to the array elements, while
- * keeping the scope of the array limited to the current source file.
- *
- * - type: The data type of the elements in the array.
- * - name: The name of the array variable.
- * - anchor: The default element.
- * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
- */
-
-#define STATIC_CONST_ARRAY_STREAMLINED(type, name, anchor, ...) \
-	static const u32 name##_size = ARRAY_SIZE_0B_ARGS(type,__VA_ARGS__);\
-	static const u32 name##_mask = ARRAY_MASK_0B_ARGS(type,__VA_ARGS__);\
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
-	static type name[1 << (ARRAY_BITS_0B_ARGS(type,__VA_ARGS__))] \
-		__attribute__ ((aligned(16))) = { \
-		[0 ... (ARRAY_MASK_0B_ARGS(type,__VA_ARGS__))] = \
-		anchor, __VA_ARGS__ \
-	}; \
-	_Pragma("clang diagnostic pop") \
-	static inline u32 name##_verify(u32 index) { \
-		return verify_0bi32pow2(index, name##_mask); \
-	} \
-	static inline type name##_at(u32 index) { \
-		return name[name##_verify(index)]; \
-	} \
-
-#define STATIC_CONST_ARRAY(type, name, anchor, ...) \
-	STATIC_CONST_ARRAY_STREAMLINED(type, name, anchor, __VA_ARGS__) 
-
-#define STATIC_ARRAY(type, name, anchor, bits) \
-	STATIC_CONST_ARRAY_STREAMLINED(type, name, anchor, [1<<bits] = anchor)
-
-/*
- * The DEFINE_1_BASED_ARRAY macro creates a fixed-size,
- * power-of-two, one-based array with a specified anchor element.
- * This allows for fast, branchless access to the array elements.
- *
- * - type: The data type of the elements in the array.
- * - name: The name of the array variable.
- * - anchor: The default element.
- * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
- *
- * O(1) time branchless access for zero-based arrays.
- *
- * If the value in it has side effects, the side effects happen only once, not
- * for each initialized field by the range initializer.
- * Requires GNU Extensions (-std=gnu99)
- */
-
-#define DEFINE_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor, ...) \
-	const u32 name##_size = ARRAY_SIZE_1B_ARGS(type,__VA_ARGS__);\
-	const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
-	const u32 name##_msb = ~name##_mask; \
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
-	type name[1 << (ARRAY_BITS_1B_ARGS(type,__VA_ARGS__))] \
-		__attribute__ ((aligned(16))) = { \
-		[0 ... (ARRAY_MASK_1B_ARGS(type,__VA_ARGS__))] = \
-		anchor, __VA_ARGS__ \
-	}; \
-	_Pragma("clang diagnostic pop") \
-
-#define DEFINE_CONST_1_BASED_ARRAY(type, name, anchor, ...) \
-	DEFINE_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor, __VA_ARGS__)
-
-#define DEFINE_1_BASED_ARRAY(type, name, anchor, bits) \
-	DEFINE_CONST_1_BASED_ARRAY(type, name, anchor, [1<<bits] = anchor)
-
-/*
- * The DECLARE_1_BASED_ARRAY macro is used to declare an external
- * streamlined array variable.
- *
- * - type: The data type of the elements in the array
- * - name: The name of the array variable.
- */
-
-#define DECLARE_CONST_1_BASED_ARRAY_STREAMLINED(type, name) \
+#define DECLARE_ARRAY_STREAMLINED(type, name) \
 	extern const u32 name##_mask; \
 	extern const u32 name##_size; \
 	extern const u32 name##_msb; \
 	extern type name[]; \
 	static inline u32 name##_verify(u32 index) { \
-		return verify_1bi32pow2(index, name##_mask, name##_msb); \
+		return index_pow2_1b(index, name##_mask, name##_msb); \
 	} \
 	static inline type name##_at(u32 index) { \
 		return name[name##_verify(index)]; \
 	}
 
-#define DECLARE_CONST_1_BASED_ARRAY(type, name) \
-	DECLARE_CONST_1_BASED_ARRAY_STREAMLINED(type, name)
-
 /*
- * The STATIC_1_BASED_ARRAY macro creates a static, fixed-size,
+ * The STATIC_ARRAY_STREAMLINED macro creates a static, fixed-size,
  * power-of-two, one-based array with a specified anchor element.
  *
- * This allows for fast, branchless access to the array elements, while
- * keeping the scope of the array limited to the current source file.
+ * This allows for fast access to the array elements, while keeping the scope of
+ * the array limited to the current source file.
  *
  * - type: The data type of the elements in the array.
  * - name: The name of the array variable.
@@ -288,32 +268,41 @@
  * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
  */
 
-#define STATIC_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor, ...) \
-	static const u32 name##_size = ARRAY_SIZE_1B_ARGS(type,__VA_ARGS__);\
+#define STATIC_ARRAY_STREAMLINED(type, name, anchor, ...) \
 	static const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
-	static const u32 name##_msb = ~name##_mask; \
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	_unused static const u32 name##_msb = ~name##_mask; \
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	static type name[1 << (ARRAY_BITS_1B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
 		[0 ... (ARRAY_MASK_1B_ARGS(type,__VA_ARGS__))] = \
 		anchor, __VA_ARGS__ \
 	}; \
-	_Pragma("clang diagnostic pop") \
-	static inline u32 name##_verify(u32 index) { \
-		return verify_1bi32pow2(index, name##_mask, name##_msb); \
-	} \
-	static inline type name##_at(u32 index) { \
-		return name[name##_verify(index)]; \
-	} \
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP
 
-#define STATIC_CONST_1_BASED_ARRAY(type, name, anchor, ...) \
-	STATIC_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor,__VA_ARGS__)
+/* Bounds-checked array access. */
+#define ARRAY_STREAMLINED_AT(name, index) ({ \
+	name[index_pow2_1b_branch(index, name##_mask, name##_msb)]; \
+})
 
-#define STATIC_1_BASED_ARRAY(type, name, anchor, bits) \
-	STATIC_CONST_1_BASED_ARRAY(type, name, anchor, [1<<bits] = anchor)
+/* Bounds-checked array access, constant-time and no branches. */
+#define ARRAY_STREAMLINED_AT_CT(name, index) ({ \
+	name[index_pow2_1b(index, name##_mask, name##_msb)]; \
+})
+
+/* Use this in hot paths where bounds are already verified. */
+#define ARRAY_STREAMLINED_AT_FAST(name, index) ({ \
+	name[index]; \
+})
+
+/* Bounds-checked index access. */
+#define ARRAY_STREAMLINED_INDEX(name, index) ({ \
+	index_pow2_1b_branch(index, name##_mask, name##_msb); \
+})
+
+/* Bounds-checked index access, constant-time and no branches. */
+#define ARRAY_STREAMLINED_INDEX_CT(name, index) ({ \
+	index_pow2_1b(index, name##_mask, name##_msb); \
+})
 
 /* Run block on bits of number */
 #define VISIT_ARRAY_BITS_NUM(num, bit, block)                \

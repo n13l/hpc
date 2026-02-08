@@ -46,6 +46,154 @@ source "scripts/Kconfig.compiler"
 source "scripts/Kconfig.debug"
 endmenu
 
+menu "Library options"
+
+#
+# CONFIG_THREADS and CONFIG_RCU themselves are declared once, in the shared
+# scripts/Kconfig.compiler (kbuild submodule), so hpc, crypto and un see the
+# same symbols. CONFIG_RCU turns on the lockless variants of the intrusive
+# containers - <hpc/queue.h>, <hpc/rbtree.h>, <hpc/hash/table.h> - which bind to
+# the vendored liburcu (vendor/userspace-rcu) through <hpc/rcu.h>. What is
+# hpc-specific, and lives here, is which liburcu flavour that binding uses:
+# the choice below picks both the header and the archive that gets linked, so
+# readers can never end up paired with another flavour's grace periods.
+#
+
+choice
+	prompt "RCU flavour (liburcu)"
+	depends on RCU
+	default RCU_MEMB
+	help
+	  Which liburcu flavour <hpc/rcu.h> binds to. It selects the read-side
+	  cost and what a read-side thread owes the implementation; the vendored
+	  liburcu is built and linked to match.
+
+config RCU_MEMB
+	bool "memb - sys_membarrier (default)"
+	help
+	  Readers do plain loads and stores, writers force the barrier on every
+	  other thread with sys_membarrier(). The best default: a read side
+	  nearly as cheap as QSBR with none of its obligations. Each thread
+	  entering a read-side section must call rcu_register_thread() first.
+
+	  Falls back to a signal-based scheme where the kernel has no
+	  membarrier support.
+
+	  If unsure, say Y.
+
+config RCU_QSBR
+	bool "qsbr - quiescent-state based"
+	help
+	  The cheapest read side available - read-side sections cost nothing at
+	  all - in exchange for an obligation: nothing marks where a reader is
+	  done, so every read-side thread must announce a quiescent state
+	  itself, with rcu_quiescent_state(), often enough that writers make
+	  progress. For hot loops that can be instrumented that way.
+
+config RCU_BP
+	bool "bp - bulletproof"
+	help
+	  Registers a thread on its first read-side section and needs no
+	  unregistration, at the price of a slower read side. For code that is
+	  loaded into a process it does not own (a library, a plugin) and so
+	  cannot make every thread register.
+
+endchoice
+
+#
+# Configuration options. <hpc/conf.h> lets a program declare its knobs once, as
+# attributes grouped into sections, and generates the getopt_long() tables, the
+# --help text and the sec.attr namespace from that one declaration. The symbol
+# below decides how much of it a build pays for.
+#
+
+config SECTION
+	bool "Configuration sections and attribute descriptions"
+	default y
+	help
+	  Keep the section names and the attribute descriptions that
+	  <hpc/conf.h> declarations carry, and the code that uses them:
+	  a --help text grouped by section, the <section>.<attribute>
+	  namespace behind -S and conf_set(), the configuration file reader
+	  behind -C, and --dumpconfig.
+
+	  Say N and none of that is in the binary. The gate is in the
+	  declaration macros themselves, not around the code that reads them:
+	  the section name, the section headline and every attribute's metavar
+	  and description stop being fields of the structures, so the string
+	  literals are never named and never linked. What is left of an
+	  attribute is its long name, its short letter, its target and its
+	  type - exactly what getopt_long() and the value parser need - and
+	  -S, -C and --dumpconfig disappear from the command line with the
+	  machinery behind them.
+
+	  What does not change is the program: option spellings are declared
+	  verbatim and a section is a namespace, never a prefix, so the command
+	  line is identical either way, and source that compiled with this on
+	  compiles with it off. conf_set(), conf_load() and conf_dump() become
+	  inline stubs and --help prints the option list without descriptions.
+
+	  Say N for a small statically linked tool that only needs its options
+	  parsed. If unsure, say Y.
+
+#
+# Memory options. These are kernel hints the slab allocators pass to madvise()
+# over their reservation; both are off by default because both trade memory for
+# speed, and neither is a win for every block size or workload. Where the
+# reservation itself comes from is a separate, source-level choice - the
+# SLAB_VM_* hooks in <mem/slab_vm.h> - not a Kconfig symbol, because a custom
+# allocator has to be named by the code that supplies it.
+#
+
+config MEM_HUGEPAGE
+	bool "Back slab reservations with transparent huge pages"
+	help
+	  Ask for MADV_HUGEPAGE over each slab reservation, so the kernel backs
+	  it with 2 MB pages where it can. The point is TLB reach: a slab large
+	  enough to be randomly accessed across gigabytes spends real time on TLB
+	  misses that huge pages avoid.
+
+	  The cost is granularity, and it is not subtle. A huge page is faulted,
+	  and released, 2 MB at a time, so this also makes 2 MB the slab's release
+	  grain: min, max and grow_step are rounded up to a whole 2 MB, and a slab
+	  can no longer shrink below it. A policy asking for a 64 block minimum of
+	  2048 byte blocks gets 1024 blocks - 2 MB - because that is what the
+	  kernel will fault in either way, and the block counts the slab reports
+	  are meant to mean the memory it is holding. Read the rounded policy back
+	  with slab_policy_min()/slab_policy_max().
+
+	  So: worth it for a slab that stays large and hot, where TLB reach is the
+	  cost that matters. Wrong for many small slabs, which it would round up
+	  to 2 MB apiece.
+
+	  Requires transparent_hugepage=madvise or always. Where the kernel cannot
+	  honour it the hint fails and is ignored - but the rounding still applies,
+	  because it is a build-time decision.
+
+	  If unsure, say N.
+
+config MEM_POPULATE
+	bool "Pre-fault slab blocks when committing them"
+	help
+	  Ask for MADV_POPULATE_WRITE over the blocks each grow step commits, so
+	  one syscall faults the range instead of taking a page fault per page.
+
+	  This applies only where a block is no larger than a page, and is
+	  compiled out entirely otherwise. Committing a block writes a free-list
+	  node into it, which for a sub-page block already touches every page in
+	  the range - that is the fault-per-page this replaces, measured about
+	  1.7x cheaper for a 2048 byte block. A block spanning several pages is
+	  the opposite case: the node write touches only its first page, so
+	  pre-faulting the rest commits memory the caller may never touch and
+	  measures slower.
+
+	  Needs Linux 5.14 or newer. On an older kernel the hint fails and blocks
+	  are faulted lazily as before.
+
+	  If unsure, say N.
+
+endmenu
+
 menu "Module support"
 
 config MODULES

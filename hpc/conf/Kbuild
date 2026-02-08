@@ -1,0 +1,9 @@
+# The getopt_long() half is always built: without CONFIG_SECTION the module is
+# still a complete option parser, only with no names, headlines or descriptions
+# left to group and document the options with.
+obj-y += ctx.o parse.o getopt.o help.o
+
+# The section namespace - sec.attr lookup, -S, the configuration file reader
+# and --dumpconfig - has nothing to address without section names, so it is not
+# compiled at all; <hpc/conf.h> replaces its entry points with stubs.
+obj-$(CONFIG_SECTION) += section.o

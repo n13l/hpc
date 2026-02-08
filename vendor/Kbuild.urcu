@@ -1,0 +1,50 @@
+#
+# liburcu (userspace-rcu) build flags - included by any Kbuild that compiles
+# against, or links, hpc's RCU containers:
+#
+#   include $(srctree)/vendor/Kbuild.urcu
+#
+# hpc reaches this file directly; un reaches the same file through its committed
+# vendor/Kbuild.urcu symlink, so the line above is identical in both trees and
+# hpc's own selftests Kbuild works either way.
+#
+# The library itself is configured and built during vendor-prepare, before the
+# first object is compiled (see build-urcu.sh), and staged into a single prefix
+# in the object tree. Everything here is empty unless CONFIG_RCU is set, so a
+# non-RCU build links exactly as it did before.
+#
+#   URCU_CFLAGS   include path plus _LGPL_SOURCE, which is what gets liburcu's
+#                 read-side and pointer primitives inlined instead of called
+#                 through the shared object (see <hpc/rcu.h>)
+#   URCU_LIBS     archives to put on a link line, for binaries that open
+#                 read-side sections or wait for grace periods; the pointer
+#                 publication used by the container traversals is inline and
+#                 needs nothing linked
+#
+
+URCU_CFLAGS :=
+URCU_LIBS :=
+
+ifeq ($(CONFIG_RCU),y)
+
+URCU_INSTALL := $(objtree)/vendor/userspace-rcu/install
+
+# The flavour chosen in the configuration picks the archive; <hpc/rcu.h> picks
+# the matching header from the same prefix. build-urcu.sh defaults the same way
+# for a configuration predating the choice.
+URCU_FLAVOUR-$(CONFIG_RCU_MEMB) := urcu
+URCU_FLAVOUR-$(CONFIG_RCU_QSBR) := urcu-qsbr
+URCU_FLAVOUR-$(CONFIG_RCU_BP)   := urcu-bp
+ifeq ($(URCU_FLAVOUR-y),)
+URCU_FLAVOUR-y := urcu
+endif
+
+URCU_CFLAGS := -D_LGPL_SOURCE -I$(URCU_INSTALL)/include
+
+# liburcu-common carries the wait-free queue call_rcu() defers through, so it
+# goes on every link; -pthread because liburcu is pthread-based.
+URCU_LIBS := $(URCU_INSTALL)/lib/lib$(URCU_FLAVOUR-y).a \
+             $(URCU_INSTALL)/lib/liburcu-common.a \
+             -pthread
+
+endif
