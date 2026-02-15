@@ -49,6 +49,7 @@ obj
 # Kernel Module Compile Results
 *.mod*
 *.cmd
+.cache
 .tmp_versions/
 modules.order
 Module.symvers
