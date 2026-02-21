@@ -117,8 +117,8 @@
 	((1 << ARRAY_BITS_1B_ARGS(type,__VA_ARGS__)) - 1)
 
 /*
- * The DEFINE_CONST_ARRAY_STREAMLINED macro creates a fixed-size, power-of-two,
- * zero-based array with a specified anchor element.
+ * The DEFINE_ARRAY macro creates a fixed-size, power-of-two, zero-based
+ * array with a specified anchor element.
  * This allows for fast, branchless access to the array elements.
  *
  * - type: The data type of the elements in the array.
@@ -133,7 +133,7 @@
  * Requires GNU Extensions (-std=gnu99)
  */
 
-#define DEFINE_CONST_ARRAY_STREAMLINED(type, name, anchor, ...) \
+#define DEFINE_ARRAY(type, name, anchor, ...) \
 	const u32 name##_size = ARRAY_SIZE_0B_ARGS(type,__VA_ARGS__);\
 	const u32 name##_mask = ARRAY_MASK_0B_ARGS(type,__VA_ARGS__);\
 	_Pragma("clang diagnostic push") \
@@ -147,21 +147,15 @@
 	}; \
 	_Pragma("clang diagnostic pop") \
 
-#define DEFINE_CONST_ARRAY(type, name, anchor, ...) \
-	DEFINE_CONST_ARRAY_STREAMLINED(type, name, anchor, __VA_ARGS__)
-
-#define DEFINE_ARRAY_STREAMLINED(type, name, anchor, bits) \
-	DEFINE_CONST_ARRAY_STREAMLINED(type, name, anchor, [1<<bits] = anchor)
-
 /*
- * The DECLARE_ARRAY_STREAMLINED macro is used to declare an external
+ * The DECLARE_ARRAY macro is used to declare an external
  * streamlined array variable.
  *
  * - type: The data type of the elements in the array
  * - name: The name of the array variable.
  */
 
-#define DECLARE_CONST_ARRAY_STREAMLINED(type, name) \
+#define DECLARE_ARRAY(type, name) \
 	extern const u32 name##_mask; \
 	extern const u32 name##_size; \
 	extern type name[]; \
@@ -172,11 +166,8 @@
 		return name[name##_verify(index)]; \
 	}
 
-#define DECLARE_CONST_ARRAY(type, name) \
-	DECLARE_CONST_ARRAY_STREAMLINED(type, name)
-
 /*
- * The STATIC_ARRAY_STREAMLINED macro creates a static, fixed-size, power-of-two,
+ * The STATIC_ARRAY macro creates a static, fixed-size, power-of-two,
  * zero-based array with a specified anchor element.
  *
  * This allows for fast, branchless access to the array elements, while
@@ -188,7 +179,7 @@
  * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
  */
 
-#define STATIC_CONST_ARRAY_STREAMLINED(type, name, anchor, ...) \
+#define STATIC_ARRAY(type, name, anchor, ...) \
 	static const u32 name##_size = ARRAY_SIZE_0B_ARGS(type,__VA_ARGS__);\
 	static const u32 name##_mask = ARRAY_MASK_0B_ARGS(type,__VA_ARGS__);\
 	_Pragma("clang diagnostic push") \
@@ -208,14 +199,8 @@
 		return name[name##_verify(index)]; \
 	} \
 
-#define STATIC_CONST_ARRAY(type, name, anchor, ...) \
-	STATIC_CONST_ARRAY_STREAMLINED(type, name, anchor, __VA_ARGS__) 
-
-#define STATIC_ARRAY(type, name, anchor, bits) \
-	STATIC_CONST_ARRAY_STREAMLINED(type, name, anchor, [1<<bits] = anchor)
-
 /*
- * The DEFINE_1_BASED_ARRAY macro creates a fixed-size,
+ * The DEFINE_ARRAY_STREAMLINED macro creates a fixed-size,
  * power-of-two, one-based array with a specified anchor element.
  * This allows for fast, branchless access to the array elements.
  *
@@ -231,7 +216,7 @@
  * Requires GNU Extensions (-std=gnu99)
  */
 
-#define DEFINE_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor, ...) \
+#define DEFINE_ARRAY_STREAMLINED(type, name, anchor, ...) \
 	const u32 name##_size = ARRAY_SIZE_1B_ARGS(type,__VA_ARGS__);\
 	const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
 	const u32 name##_msb = ~name##_mask; \
@@ -246,21 +231,15 @@
 	}; \
 	_Pragma("clang diagnostic pop") \
 
-#define DEFINE_CONST_1_BASED_ARRAY(type, name, anchor, ...) \
-	DEFINE_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor, __VA_ARGS__)
-
-#define DEFINE_1_BASED_ARRAY(type, name, anchor, bits) \
-	DEFINE_CONST_1_BASED_ARRAY(type, name, anchor, [1<<bits] = anchor)
-
 /*
- * The DECLARE_1_BASED_ARRAY macro is used to declare an external
+ * The DECLARE_ARRAY_STREAMLINED macro is used to declare an external
  * streamlined array variable.
  *
  * - type: The data type of the elements in the array
  * - name: The name of the array variable.
  */
 
-#define DECLARE_CONST_1_BASED_ARRAY_STREAMLINED(type, name) \
+#define DECLARE_ARRAY_STREAMLINED(type, name) \
 	extern const u32 name##_mask; \
 	extern const u32 name##_size; \
 	extern const u32 name##_msb; \
@@ -272,11 +251,8 @@
 		return name[name##_verify(index)]; \
 	}
 
-#define DECLARE_CONST_1_BASED_ARRAY(type, name) \
-	DECLARE_CONST_1_BASED_ARRAY_STREAMLINED(type, name)
-
 /*
- * The STATIC_1_BASED_ARRAY macro creates a static, fixed-size,
+ * The STATIC_ARRAY_STREAMLINED macro creates a static, fixed-size,
  * power-of-two, one-based array with a specified anchor element.
  *
  * This allows for fast, branchless access to the array elements, while
@@ -288,7 +264,7 @@
  * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
  */
 
-#define STATIC_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor, ...) \
+#define STATIC_ARRAY_STREAMLINED(type, name, anchor, ...) \
 	static const u32 name##_size = ARRAY_SIZE_1B_ARGS(type,__VA_ARGS__);\
 	static const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
 	static const u32 name##_msb = ~name##_mask; \
@@ -308,12 +284,6 @@
 	static inline type name##_at(u32 index) { \
 		return name[name##_verify(index)]; \
 	} \
-
-#define STATIC_CONST_1_BASED_ARRAY(type, name, anchor, ...) \
-	STATIC_CONST_1_BASED_ARRAY_STREAMLINED(type, name, anchor,__VA_ARGS__)
-
-#define STATIC_1_BASED_ARRAY(type, name, anchor, bits) \
-	STATIC_CONST_1_BASED_ARRAY(type, name, anchor, [1<<bits] = anchor)
 
 /* Run block on bits of number */
 #define VISIT_ARRAY_BITS_NUM(num, bit, block)                \
