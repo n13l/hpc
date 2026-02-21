@@ -46,6 +46,19 @@
  * ensuring data accuracy and reliability before any further processing.
  */
 
+#ifdef __clang__
+#define ARRAY_DIAGNOSTIC_PUSH \
+	_Pragma("clang diagnostic push") \
+	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
+	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
+	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"")
+#define ARRAY_DIAGNOSTIC_POP \
+	_Pragma("clang diagnostic pop")
+#else
+#define ARRAY_DIAGNOSTIC_PUSH
+#define ARRAY_DIAGNOSTIC_POP
+#endif
+
 /*
  * The ARRAY_SIZE macro calculates the number of elements in a given array.
  *
@@ -265,25 +278,21 @@
  */
 
 #define STATIC_ARRAY_STREAMLINED(type, name, anchor, ...) \
-	static const u32 name##_size = ARRAY_SIZE_1B_ARGS(type,__VA_ARGS__);\
 	static const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
 	static const u32 name##_msb = ~name##_mask; \
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	ARRAY_DIAGNOSTIC_PUSH \
 	static type name[1 << (ARRAY_BITS_1B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
 		[0 ... (ARRAY_MASK_1B_ARGS(type,__VA_ARGS__))] = \
 		anchor, __VA_ARGS__ \
 	}; \
-	_Pragma("clang diagnostic pop") \
-	static inline u32 name##_verify(u32 index) { \
-		return verify_1bi32pow2(index, name##_mask, name##_msb); \
-	} \
-	static inline type name##_at(u32 index) { \
-		return name[name##_verify(index)]; \
-	} \
+	ARRAY_DIAGNOSTIC_POP
+
+#define ARRAY_STREAMLINED_FETCH(name, index) \
+	verify_1bi32pow2(index, name##_mask, name##_msb)
+
+#define ARRAY_STREAMLINED_AT(name, index) \
+	*name[verify_1bi32pow2(index, name##_mask, name##_msb)]
 
 /* Run block on bits of number */
 #define VISIT_ARRAY_BITS_NUM(num, bit, block)                \
