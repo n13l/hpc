@@ -47,16 +47,16 @@
  */
 
 #ifdef __clang__
-#define ARRAY_DIAGNOSTIC_PUSH \
+#define STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	_Pragma("clang diagnostic push") \
 	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
 	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
 	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"")
-#define ARRAY_DIAGNOSTIC_POP \
+#define STREAMLINED_ARRAY_DIAGNOSTIC_POP \
 	_Pragma("clang diagnostic pop")
 #else
-#define ARRAY_DIAGNOSTIC_PUSH
-#define ARRAY_DIAGNOSTIC_POP
+#define STREAMLINED_ARRAY_DIAGNOSTIC_PUSH
+#define STREAMLINED_ARRAY_DIAGNOSTIC_POP
 #endif
 
 /*
@@ -149,16 +149,13 @@
 #define DEFINE_ARRAY(type, name, anchor, ...) \
 	const u32 name##_size = ARRAY_SIZE_0B_ARGS(type,__VA_ARGS__);\
 	const u32 name##_mask = ARRAY_MASK_0B_ARGS(type,__VA_ARGS__);\
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	type name[1 << (ARRAY_BITS_0B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
 		[0 ... (ARRAY_MASK_0B_ARGS(type,__VA_ARGS__))] = \
 		anchor, __VA_ARGS__ \
 	}; \
-	_Pragma("clang diagnostic pop") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP \
 
 /*
  * The DECLARE_ARRAY macro is used to declare an external
@@ -195,16 +192,13 @@
 #define STATIC_ARRAY(type, name, anchor, ...) \
 	static const u32 name##_size = ARRAY_SIZE_0B_ARGS(type,__VA_ARGS__);\
 	static const u32 name##_mask = ARRAY_MASK_0B_ARGS(type,__VA_ARGS__);\
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	static type name[1 << (ARRAY_BITS_0B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
 		[0 ... (ARRAY_MASK_0B_ARGS(type,__VA_ARGS__))] = \
 		anchor, __VA_ARGS__ \
 	}; \
-	_Pragma("clang diagnostic pop") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP \
 	static inline u32 name##_verify(u32 index) { \
 		return verify_0bi32pow2(index, name##_mask); \
 	} \
@@ -233,16 +227,13 @@
 	const u32 name##_size = ARRAY_SIZE_1B_ARGS(type,__VA_ARGS__);\
 	const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
 	const u32 name##_msb = ~name##_mask; \
-	_Pragma("clang diagnostic push") \
-	_Pragma("clang diagnostic ignored \"-Wc99-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Wgnu-designator\"") \
-	_Pragma("clang diagnostic ignored \"-Winitializer-overrides\"") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	type name[1 << (ARRAY_BITS_1B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
 		[0 ... (ARRAY_MASK_1B_ARGS(type,__VA_ARGS__))] = \
 		anchor, __VA_ARGS__ \
 	}; \
-	_Pragma("clang diagnostic pop") \
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP \
 
 /*
  * The DECLARE_ARRAY_STREAMLINED macro is used to declare an external
@@ -280,13 +271,13 @@
 #define STATIC_ARRAY_STREAMLINED(type, name, anchor, ...) \
 	static const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
 	static const u32 name##_msb = ~name##_mask; \
-	ARRAY_DIAGNOSTIC_PUSH \
+	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	static type name[1 << (ARRAY_BITS_1B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
 		[0 ... (ARRAY_MASK_1B_ARGS(type,__VA_ARGS__))] = \
 		anchor, __VA_ARGS__ \
 	}; \
-	ARRAY_DIAGNOSTIC_POP
+	STREAMLINED_ARRAY_DIAGNOSTIC_POP
 
 #define ARRAY_STREAMLINED_FETCH(name, index) \
 	verify_1bi32pow2(index, name##_mask, name##_msb)
