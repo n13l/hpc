@@ -170,7 +170,7 @@
 	extern const u32 name##_size; \
 	extern type name[]; \
 	static inline u32 name##_verify(u32 index) { \
-		return verify_0bi32pow2(index, name##_mask); \
+		return index_pow2_ob(index, name##_mask); \
 	} \
 	static inline type name##_at(u32 index) { \
 		return name[name##_verify(index)]; \
@@ -200,7 +200,7 @@
 	}; \
 	STREAMLINED_ARRAY_DIAGNOSTIC_POP \
 	static inline u32 name##_verify(u32 index) { \
-		return verify_0bi32pow2(index, name##_mask); \
+		return index_pow2_ob(index, name##_mask); \
 	} \
 	static inline type name##_at(u32 index) { \
 		return name[name##_verify(index)]; \
@@ -249,7 +249,7 @@
 	extern const u32 name##_msb; \
 	extern type name[]; \
 	static inline u32 name##_verify(u32 index) { \
-		return verify_1bi32pow2(index, name##_mask, name##_msb); \
+		return index_pow2_1b(index, name##_mask, name##_msb); \
 	} \
 	static inline type name##_at(u32 index) { \
 		return name[name##_verify(index)]; \
@@ -259,8 +259,8 @@
  * The STATIC_ARRAY_STREAMLINED macro creates a static, fixed-size,
  * power-of-two, one-based array with a specified anchor element.
  *
- * This allows for fast, branchless access to the array elements, while
- * keeping the scope of the array limited to the current source file.
+ * This allows for fast access to the array elements, while keeping the scope of
+ * the array limited to the current source file.
  *
  * - type: The data type of the elements in the array.
  * - name: The name of the array variable.
@@ -270,7 +270,7 @@
 
 #define STATIC_ARRAY_STREAMLINED(type, name, anchor, ...) \
 	static const u32 name##_mask = ARRAY_MASK_1B_ARGS(type,__VA_ARGS__);\
-	static const u32 name##_msb = ~name##_mask; \
+	_unused static const u32 name##_msb = ~name##_mask; \
 	STREAMLINED_ARRAY_DIAGNOSTIC_PUSH \
 	static type name[1 << (ARRAY_BITS_1B_ARGS(type,__VA_ARGS__))] \
 		__attribute__ ((aligned(16))) = { \
@@ -279,11 +279,30 @@
 	}; \
 	STREAMLINED_ARRAY_DIAGNOSTIC_POP
 
-#define ARRAY_STREAMLINED_FETCH(name, index) \
-	verify_1bi32pow2(index, name##_mask, name##_msb)
+/* Bounds-checked array access. */
+#define ARRAY_STREAMLINED_AT(name, index) ({ \
+	name[index_pow2_1b_branch(index, name##_mask, name##_msb)]; \
+})
 
-#define ARRAY_STREAMLINED_AT(name, index) \
-	*name[verify_1bi32pow2(index, name##_mask, name##_msb)]
+/* Bounds-checked array access, constant-time and no branches. */
+#define ARRAY_STREAMLINED_AT_CT(name, index) ({ \
+	name[index_pow2_1b(index, name##_mask, name##_msb)]; \
+})
+
+/* Use this in hot paths where bounds are already verified. */
+#define ARRAY_STREAMLINED_AT_FAST(name, index) ({ \
+	name[index]; \
+})
+
+/* Bounds-checked index access. */
+#define ARRAY_STREAMLINED_INDEX(name, index) ({ \
+	index_pow2_1b_branch(index, name##_mask, name##_msb); \
+})
+
+/* Bounds-checked index access, constant-time and no branches. */
+#define ARRAY_STREAMLINED_INDEX_CT(name, index) ({ \
+	index_pow2_1b(index, name##_mask, name##_msb); \
+})
 
 /* Run block on bits of number */
 #define VISIT_ARRAY_BITS_NUM(num, bit, block)                \
