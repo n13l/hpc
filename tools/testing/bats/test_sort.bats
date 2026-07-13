@@ -9,14 +9,18 @@
 #
 
 setup_file() {
-    HPC_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
+    # tools/testing/bats -> package root is three levels up.
+    HPC_ROOT="$(cd "${BATS_TEST_DIRNAME}/../../.." && pwd)"
     export HPC_ROOT
-    # Look up the test binary in the usual kbuild output locations.
+    # Prefer the binary path exported by run-check.sh (TEST_SORT_BIN); fall
+    # back to the usual kbuild output locations.
     for candidate in \
-        "${HPC_ROOT}/tests/sort/test_sort" \
-        "${HPC_ROOT}/output/tests/sort/test_sort" \
-        "${HPC_ROOT}/build/tests/sort/test_sort"
+        "${TEST_SORT_BIN:-}" \
+        "${HPC_ROOT}/obj/tools/testing/selftests/units/test_sort" \
+        "${HPC_ROOT}/output/tools/testing/selftests/units/test_sort" \
+        "${HPC_ROOT}/build/tools/testing/selftests/units/test_sort"
     do
+        [ -n "${candidate}" ] || continue
         if [[ -x "${candidate}" ]]; then
             TEST_SORT_BIN="${candidate}"
             break

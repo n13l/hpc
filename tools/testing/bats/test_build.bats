@@ -5,7 +5,7 @@
 #
 
 setup_file() {
-    HPC_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
+    HPC_ROOT="$(cd "${BATS_TEST_DIRNAME}/../../.." && pwd)"
     export HPC_ROOT
 }
 

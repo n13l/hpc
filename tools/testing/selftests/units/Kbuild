@@ -1,0 +1,4 @@
+# hpc unit selftests.
+cmockatest-$(CONFIG_CMOCKA) := test_sort
+CMOCKA_CFLAGS = -I$(srctree)/hpc
+CMOCKA_LIBS_test_sort = hpc/built-in.o
