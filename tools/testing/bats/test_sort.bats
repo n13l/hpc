@@ -29,23 +29,21 @@ setup_file() {
     export TEST_SORT_BIN="${TEST_SORT_BIN:-}"
 }
 
-@test "sort: test_sort binary is built" {
+@test "sort: binary built" {
     [ -n "${TEST_SORT_BIN}" ] || skip "test_sort binary not built (run: make tests)"
     [ -x "${TEST_SORT_BIN}" ]
 }
 
-@test "sort: cmocka group passes" {
+@test "sort: cmocka group" {
     [ -n "${TEST_SORT_BIN}" ] || skip "test_sort binary not built"
     run "${TEST_SORT_BIN}"
     [ "${status}" -eq 0 ]
-    # cmocka prints the group name on success; surface its TAP-ish line.
     [[ "${output}" == *"PASSED"* || "${output}" == *"ok"* ]]
 }
 
-@test "sort: merge_range_asc produces a monotonic sequence" {
+@test "sort: merge_range_asc monotonic" {
     [ -n "${TEST_SORT_BIN}" ] || skip "test_sort binary not built"
     run "${TEST_SORT_BIN}"
     [ "${status}" -eq 0 ]
-    # The cmocka test logs each merge step; ensure none failed.
     [[ "${output}" != *"FAILED"* ]]
 }
