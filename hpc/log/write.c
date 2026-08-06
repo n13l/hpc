@@ -129,8 +129,19 @@ enum log_out {
 static int log_caps = 0;
 static int log_type = 0;
 
+/*
+ * The verbosity a build starts at (CONFIG_VERBOSE, scripts/Kconfig.compiler).
+ * A program with a -v of its own assigns this from its options once they are
+ * parsed; until then, and forever for a program that has no such option, this
+ * is what the debug1() .. debug4() gates compare against. Built outside kbuild
+ * there is no symbol and the historical default stands.
+ */
+#ifndef CONFIG_VERBOSE
+#define CONFIG_VERBOSE 0
+#endif
+
 void *log_userdata = NULL;
-int log_verbose = 0;
+int log_verbose = CONFIG_VERBOSE;
 int log_silent = 0;
 int log_append = 0;
 char progname[256] = {0};

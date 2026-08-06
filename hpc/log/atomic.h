@@ -111,8 +111,9 @@ struct log_ctx {
  * CONFIG_LOGGING is what compiles hpc/log/ (see hpc/Kbuild), so it is also what
  * decides whether these expand to a call: with logging off the writer and the
  * log_silent/log_verbose gates it defines do not exist, and a caller that still
- * emitted the call would not link. CONFIG_SILENT is a subset - it depends on
- * !LOGGING - so it needs no gate of its own here.
+ * emitted the call would not link. CONFIG_SILENT needs no gate of its own here:
+ * LOGGING depends on !SILENT, so a silent build has logging off by
+ * construction and this one condition covers both.
  */
 
 #ifdef CONFIG_LOGGING
