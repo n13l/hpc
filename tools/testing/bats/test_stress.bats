@@ -2,13 +2,13 @@
 #
 # Surfaces the RCU container stress units' measurement report.
 #
-# run-check.sh runs every unit binary with its output discarded: a unit passes or
-# it fails, and that is all `make check` wants from one. These two also *measure* -
-# memory grown and handed back, objects expired and retired, grace periods waited
-# for, read-side sections and integrity checks per thread - and a number nobody
-# ever sees is a number nobody notices going wrong. So the suite runs each once
-# more and echoes its report to bats' fd 3, which is the channel whose text
-# reaches a check log.
+# test_units.bats runs a unit binary with its output discarded: a unit passes
+# or it fails, and that is all `make check` wants from one. These two also
+# *measure* - memory grown and handed back, objects expired and retired, grace
+# periods waited for, read-side sections and integrity checks per thread - and
+# a number nobody ever sees is a number nobody notices going wrong. So this
+# suite owns them instead, and echoes each report to bats' fd 3, which is the
+# channel whose text reaches a check log.
 #
 # The report lines are TAP comments (they start with '#'), so forwarding them
 # keeps the stream valid in either bats output mode.
