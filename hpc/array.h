@@ -279,6 +279,33 @@
 	}; \
 	STREAMLINED_ARRAY_DIAGNOSTIC_POP
 
+/*
+ * The STATIC_ARRAY_STREAMLINED_TRACE macro creates a static, fixed-size,
+ * power-of-two, one-based array with a specified anchor element.
+ *
+ * This allows for fast access to the array elements, while keeping the scope of
+ * the array limited to the current source file.
+ *
+ * - type: The data type of the elements in the array.
+ * - name: The name of the array variable.
+ * - anchor: The default element.
+ * - __VA_ARGS__: A list of array elements to be initialized after the anchor.
+ */
+
+#ifndef CONFIG_SILENT
+#define STATIC_ARRAY_STREAMLINED_TRACE(type, name, anchor, ...) \
+	STATIC_ARRAY_STREAMLINED(type, name, anchor, __VA_ARGS__)
+
+#else
+/*
+ * The table is what a trace was going to be labelled with, so a silent build
+ * does not have one. Nothing is declared here on purpose: a caller that reads
+ * such a table outside its own tracing will not link, which is the intended
+ * answer rather than a silent empty string.
+ */
+#define STATIC_ARRAY_STREAMLINED_TRACE(type, name, anchor, ...)
+#endif
+
 /* Bounds-checked array access. */
 #define ARRAY_STREAMLINED_AT(name, index) ({ \
 	name[index_pow2_1b_branch(index, name##_mask, name##_msb)]; \
@@ -295,14 +322,43 @@
 })
 
 /* Bounds-checked index access. */
-#define ARRAY_STREAMLINED_INDEX(name, index) ({ \
-	index_pow2_1b_branch(index, name##_mask, name##_msb); \
-})
+#ifndef CONFIG_SILENT
+#define ARRAY_STREAMLINED_INDEX_TRACE(name, index, _anch) \
+	ARRAY_STREAMLINED_INDEX(name, index)
+#else
+#define ARRAY_STREAMLINED_INDEX_TRACE(name, index, _anch) _anch 
+#endif
 
 /* Bounds-checked index access, constant-time and no branches. */
-#define ARRAY_STREAMLINED_INDEX_CT(name, index) ({ \
-	index_pow2_1b(index, name##_mask, name##_msb); \
-})
+#ifndef CONFIG_SILENT
+#define ARRAY_STREAMLINED_INDEX_CT_TRACE(name, index, _anch) \
+	ARRAY_STREAMLINED_INDEX_CT(name, index)
+#else
+#define ARRAY_STREAMLINED_INDEX_CT_TRACE(name, index, _anch) _anch
+#endif
+
+/* Bounds-checked array access. */
+/*
+ * @_anch is what the access yields where the table does not exist:
+ * STATIC_ARRAY_STREAMLINED_TRACE() declares nothing in a silent build, so a
+ * reader of one has to have an answer that does not involve it. Same shape as
+ * ARRAY_STREAMLINED_INDEX_TRACE() above, and for the same reason.
+ */
+#ifndef CONFIG_SILENT
+#define ARRAY_STREAMLINED_AT_TRACE(name, index, _anch) \
+	ARRAY_STREAMLINED_AT(name, index)
+#else
+#define ARRAY_STREAMLINED_AT_TRACE(name, index, _anch) (_anch)
+#endif
+
+/* Bounds-checked array access, constant-time and no branches. */
+#ifndef CONFIG_SILENT
+#define ARRAY_STREAMLINED_AT_CT_TRACE(name, index, _anch) \
+	ARRAY_STREAMLINED_AT_CT(name, index)
+#else
+#define ARRAY_STREAMLINED_AT_CT_TRACE(name, index, _anch) (_anch)
+#endif
+
 
 /* Run block on bits of number */
 #define VISIT_ARRAY_BITS_NUM(num, bit, block)                \

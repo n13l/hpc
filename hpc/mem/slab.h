@@ -525,7 +525,7 @@ __slab_init(struct slab *slab, unsigned shift, const struct slab_policy *policy)
 	slab->page = SLAB_VM_ALLOC(slab->length);
 	if (slab->page == SLAB_VM_FAILED) {
 		slab->page = NULL;
-		trace1("slab_init: reserving %lu bytes failed",
+		trace4("slab_init: reserving %lu bytes failed",
 			(unsigned long)slab->length);
 		return -1;
 	}
@@ -544,7 +544,7 @@ __slab_init(struct slab *slab, unsigned shift, const struct slab_policy *policy)
 	if (policy->min)
 		__slab_grow(slab, shift, policy->min);
 
-	trace1("slab_init (shift: %u, min: %u, max: %u, length: %lu): %p",
+	trace4("slab_init (shift: %u, min: %u, max: %u, length: %lu): %p",
 		shift, policy->min, policy->max,
 		(unsigned long)slab->length, slab->page);
 	return 0;
@@ -553,7 +553,7 @@ __slab_init(struct slab *slab, unsigned shift, const struct slab_policy *policy)
 static inline void
 __slab_fini(struct slab *slab)
 {
-	trace1("slab_fini (shift: %u, total: %u, length: %lu): %p",
+	trace4("slab_fini (shift: %u, total: %u, length: %lu): %p",
 		slab->shift, slab->total, (unsigned long)slab->length,
 		slab->page);
 	if (slab->page)

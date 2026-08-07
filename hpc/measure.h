@@ -516,6 +516,15 @@ measure_lookup(const measure_metric *meta, u64 *values, unsigned nfield,
  * - measure_inc(m, ev):        m ? m->ev++
  * - measure_add(m, ev, n):     m ? m->ev += n
  * - measure_inc_if(m, c, ev):  (m && c) ? m->ev++   (e.g. a collision test)
+ * - measure_inc_at(m, off):    m ? (*(u64 *)((u8 *)m + off))++
+ *                        the same increment, naming the counter by its
+ *                        offsetof() rather than its member. For a counter
+ *                        picked out by a value rather than written down in the
+ *                        source: put the offsets in a table indexed by that
+ *                        value and the dispatch is a load, where a switch over
+ *                        the same values is a branch per arm. The struct is a
+ *                        dense array of u64 (DEFINE_MEASURE asserts it), so any
+ *                        member's offsetof() is a valid @off.
  * gauges (up and down):
  * - measure_dec(m, ev):        m ? m->ev--
  * - measure_sub(m, ev, n):     m ? m->ev -= n
@@ -545,6 +554,8 @@ measure_lookup(const measure_metric *meta, u64 *values, unsigned nfield,
 	do { if (_m) (_m)->_ev = (u64)(_v); } while (0)
 #define always_measure_inc_if(_m, _cond, _ev) \
 	do { if ((_m) && (_cond)) (_m)->_ev++; } while (0)
+#define always_measure_inc_at(_m, _off) \
+	do { if (_m) (*(u64 *)((u8 *)(_m) + (_off)))++; } while (0)
 #define always_measure_get(_m, _ev) \
 	((_m) ? (_m)->_ev : (u64)0)
 
@@ -559,6 +570,7 @@ measure_lookup(const measure_metric *meta, u64 *values, unsigned nfield,
 #define measure_sub(_m, _ev, _n)        always_measure_sub(_m, _ev, _n)
 #define measure_set(_m, _ev, _v)        always_measure_set(_m, _ev, _v)
 #define measure_inc_if(_m, _cond, _ev)  always_measure_inc_if(_m, _cond, _ev)
+#define measure_inc_at(_m, _off)        always_measure_inc_at(_m, _off)
 #define measure_get(_m, _ev)            always_measure_get(_m, _ev)
 
 #else
@@ -571,6 +583,15 @@ measure_lookup(const measure_metric *meta, u64 *values, unsigned nfield,
 #define measure_sub(_m, _ev, _n)        ((void)0)
 #define measure_set(_m, _ev, _v)        ((void)0)
 #define measure_inc_if(_m, _cond, _ev)  ((void)0)
+/*
+ * @_off is discarded, not dropped: it is an ordinary expression - typically a
+ * lookup in a table of offsetof()s - and a table whose only reader vanished
+ * with CONFIG_MEASURE is a table the compiler calls unused. Evaluating and
+ * throwing it away keeps it referenced and costs nothing, the load being dead
+ * from there. The member-name family above cannot do this and does not need
+ * to: a member is not an expression a caller had to build.
+ */
+#define measure_inc_at(_m, _off)        ((void)(_m), (void)(_off))
 #define measure_get(_m, _ev)            ((u64)0)
 
 #endif

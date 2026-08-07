@@ -50,7 +50,10 @@ static inline u32
 get_u32_be(const void *p)
 {
 	const byte *c = (const byte *)p;
-	return (c[0] << 24) | (c[1] << 16) | (c[2] << 8) | c[3];
+	/* the top byte is widened before it is shifted: a byte promotes to int,
+	 * and any value from 0x80 up shifted 24 places overflows a signed int,
+	 * which is undefined rather than merely implementation-defined */
+	return ((u32)c[0] << 24) | ((u32)c[1] << 16) | ((u32)c[2] << 8) | c[3];
 }
 
 static inline u64
