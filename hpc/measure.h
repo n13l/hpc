@@ -832,7 +832,16 @@ measure_lookup(const measure_metric *meta, u64 *values, unsigned nfield,
 #define measure_history_every(_ns, _h, _ms, _now)  ((void)0)
 #define measure_history_save(_ns, _h, _now)        ((void)0)
 #define measure_history_due(_h, _now)              (0)
-#define measure_history_tick(_ns, _h, _now)        (0)
+
+/*
+ * A tick is written as a statement wherever a caller has a loop (the rows it
+ * would save are what it wants, not the count), so the rows-saved result has to
+ * come from something the compiler accepts unused: a plain `(0);` is a
+ * statement with no effect, and -Wunused-value says so at every call site.
+ */
+static inline int measure_history_off(void) { return 0; }
+#define measure_history_tick(_ns, _h, _now) \
+	((void)(_h), (void)(_now), measure_history_off())
 #define measure_history_count(_h)                  (0u)
 #define measure_history_slot(_h, _i)               (0u)
 /*

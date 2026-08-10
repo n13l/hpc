@@ -405,6 +405,10 @@ test_history_interval(void **state)
 	struct demo_logic l = { 0 };
 	timestamp_t now = 1000;
 
+	/* nothing is saved where the depth is 0 - see the header on that build */
+	if (!measure_history_depth)
+		skip();
+
 	measure_history_init(demo, &demo_hist, now);
 	l.measure = measure_history_live(&demo_hist);
 
@@ -452,6 +456,10 @@ test_history_wrap(void **state)
 	const timestamp_t base = 10000;
 	const unsigned over = 3;                       /* saves past a full ring */
 	timestamp_t now = base;
+
+	/* there is no ring to wrap at depth 0 */
+	if (!measure_history_depth)
+		skip();
 
 	measure_history_init(demo, &demo_hist, now);
 	l.measure = measure_history_live(&demo_hist);
@@ -550,6 +558,10 @@ test_history_member(void **state)
 		measure_history_member(slab, hist)
 		unsigned other;
 	} h;
+
+	/* the member survives a depth of 0, but it holds no row to read back */
+	if (!measure_history_depth)
+		skip();
 
 	measure_history_init(slab, &h.hist, 0);
 	struct slab_measure *m = measure_history_live(&h.hist);
