@@ -615,7 +615,7 @@ measure_lookup(const measure_metric *meta, u64 *values, unsigned nfield,
  * from there. The member-name family above cannot do this and does not need
  * to: a member is not an expression a caller had to build.
  */
-#define measure_inc_at(_m, _off)        ((void)(_m), (void)(_off))
+#define measure_inc_at(_m, _off)        
 #define measure_get(_m, _ev)            ((u64)0)
 
 #endif
@@ -895,5 +895,11 @@ measure_diff(u64 *dst, const u64 *new_, const u64 *old, unsigned nfield)
  * not the array */
 #define measure_sparse(_ns)	(_ns##_measure_sparse)
 
+#ifdef CONFIG_MEASURE
+#define DECLARE_MEASURE_SECTION(_ns, _ptr, _v) \
+	struct _ns##_measure * (v) = (_ptr)
+#else
+#define DECLARE_MEASURE_SECTION(_ns, _ptr, _v)
+#endif
 
 #endif
