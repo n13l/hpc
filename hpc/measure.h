@@ -897,7 +897,7 @@ measure_diff(u64 *dst, const u64 *new_, const u64 *old, unsigned nfield)
 
 #ifdef CONFIG_MEASURE
 #define DECLARE_MEASURE_SECTION(_ns, _ptr, _v) \
-	struct _ns##_measure * (v) = (_ptr)
+	struct _ns##_measure *_v _unused = (_ptr)
 #else
 #define DECLARE_MEASURE_SECTION(_ns, _ptr, _v)
 #endif
