@@ -62,7 +62,7 @@ run_stress() {
     local name="$1"
     local bin
     bin="$(stress_bin "${name}")"
-    [ -n "${bin}" ] || skip "${name} not built (needs an RCU build: CONFIG_RCU=y)"
+    [ -n "${bin}" ] || skip "requires CONFIG_RCU=y"
 
     run "${bin}"
 

@@ -394,5 +394,12 @@ typedef u32 endian_bitwise wsum;
 	((N) > 511) + ((N) > 1023) + ((N) > 2047) + ((N) > 4095) + \
 	((N) > 8191) + ((N) > 16383) + ((N) > 32767) + ((N) > 65535))
 
+#ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+# define CC_SZ_DECLARE(decl)  decl
+# define CC_SZ_DEFINE(decl)   decl
+#else
+# define CC_SZ_DECLARE(decl)  static inline decl
+# define CC_SZ_DEFINE(decl)   /* nothing */
+#endif
 
 #endif

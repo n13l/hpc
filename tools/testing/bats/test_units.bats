@@ -45,13 +45,16 @@ unit_bin() {
 
 # run_unit <TEST_NAME> [skip-reason] - run one cmocka group binary.
 #
+# The skip reason names only what is missing: bats already prints the case
+# title, so repeating the unit name there just makes the line longer.
+#
 # On failure the cmocka output is forwarded to fd 3, so the failing group and
 # assertion reach the check log; a passing unit stays quiet.
 run_unit() {
-    local name="$1" why="${2:-not built (run: make tests)}"
+    local name="$1" why="${2:-not built (make tests)}"
     local bin
     bin="$(unit_bin "${name}")"
-    [ -n "${bin}" ] || skip "${name} ${why}"
+    [ -n "${bin}" ] || skip "${why}"
 
     run "${bin}"
     if [ "${status}" -ne 0 ]; then
@@ -97,17 +100,17 @@ run_unit() {
 # rcutest-$(CONFIG_RCU) gate in selftests/units/Kbuild.
 
 @test "units: hashtable_rcu cmocka group" {
-    run_unit test_hashtable_rcu "not built (needs an RCU build: CONFIG_RCU=y)"
+    run_unit test_hashtable_rcu "requires CONFIG_RCU=y"
 }
 
 @test "units: queue_rcu cmocka group" {
-    run_unit test_queue_rcu "not built (needs an RCU build: CONFIG_RCU=y)"
+    run_unit test_queue_rcu "requires CONFIG_RCU=y"
 }
 
 @test "units: rbtree_rcu cmocka group" {
-    run_unit test_rbtree_rcu "not built (needs an RCU build: CONFIG_RCU=y)"
+    run_unit test_rbtree_rcu "requires CONFIG_RCU=y"
 }
 
 @test "units: slab_rcu cmocka group" {
-    run_unit test_slab_rcu "not built (needs an RCU build: CONFIG_RCU=y)"
+    run_unit test_slab_rcu "requires CONFIG_RCU=y"
 }
