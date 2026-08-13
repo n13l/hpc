@@ -895,11 +895,19 @@ measure_diff(u64 *dst, const u64 *new_, const u64 *old, unsigned nfield)
  * not the array */
 #define measure_sparse(_ns)	(_ns##_measure_sparse)
 
-#ifdef CONFIG_MEASURE
+/*
+ * The local pointer a function counts through: DECLARE_MEASURE_SECTION(ns,
+ * &f->m, m) and then measure_inc(m, ...) for the rest of the body.
+ *
+ * It is declared in every build, CONFIG_MEASURE or not, because the off side
+ * of the namespaced counting macros still names its arguments - ((void)sizeof
+ * (_m)) - so that a variable read only by a counter does not become unused
+ * when the counting goes away. That only works if the name they are given
+ * exists, so this one has to. The struct is defined by DEFINE_MEASURE in
+ * either build and the pointer is _unused and never dereferenced without
+ * CONFIG_MEASURE, so nothing is emitted for it.
+ */
 #define DECLARE_MEASURE_SECTION(_ns, _ptr, _v) \
 	struct _ns##_measure *_v _unused = (_ptr)
-#else
-#define DECLARE_MEASURE_SECTION(_ns, _ptr, _v)
-#endif
 
 #endif

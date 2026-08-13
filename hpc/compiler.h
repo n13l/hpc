@@ -394,9 +394,24 @@ typedef u32 endian_bitwise wsum;
 	((N) > 511) + ((N) > 1023) + ((N) > 2047) + ((N) > 4095) + \
 	((N) > 8191) + ((N) > 16383) + ((N) > 32767) + ((N) > 65535))
 
+/*
+ * A function defined in a header that a build optimizing for size would rather
+ * not have at every call site: CC_SZ_DECLARE wraps the definition, and
+ * CC_SZ_DEFINE the declaration that goes with it, so the same source serves
+ * either build.
+ *
+ * Optimizing for size, the definition keeps its own body - noinline, so the
+ * calls are calls - and optimizing for speed it is an ordinary static inline.
+ * It stays static either way. Giving it external linkage for the size build
+ * would put the one definition in whichever object included the header, which
+ * for a header-only layer is every object that includes it and a multiple
+ * definition at link time; one copy per object that actually uses it costs a
+ * few bytes and cannot collide. The declaration is nothing in both builds for
+ * the same reason: there is no external symbol to declare.
+ */
 #ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
-# define CC_SZ_DECLARE(decl)  decl
-# define CC_SZ_DEFINE(decl)   decl
+# define CC_SZ_DECLARE(decl)  static _noinline _unused decl
+# define CC_SZ_DEFINE(decl)   /* nothing */
 #else
 # define CC_SZ_DECLARE(decl)  static inline decl
 # define CC_SZ_DEFINE(decl)   /* nothing */
