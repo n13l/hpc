@@ -324,7 +324,12 @@ enum measure_kind { MEASURE_COUNTER, MEASURE_GAUGE, MEASURE_RATIO };
 typedef struct measure_metric {
 	sa_ccstr name, desc;
 	unsigned kind;
-	unsigned num, den;   /* MEASURE_RATIO: field indices of numerator/denom */
+	/* counter/gauge: @num is the metric's own storage field index; a ratio
+	 * has no storage and @num/@den are its numerator/denominator fields.
+	 * Ratios carry no field, so the moment one sits mid-list every later
+	 * metric's index differs from its field index - which is why the value
+	 * paths below go through @num rather than through the metric index. */
+	unsigned num, den;
 } measure_metric;
 
 /*
@@ -353,10 +358,12 @@ typedef struct measure_metric {
 
 #define MEASURE_META_C(_ns, _name, _desc) \
 	{ measure_string(stringify(_name)), measure_string(_desc), \
-	  MEASURE_COUNTER, 0, 0 },
+	  MEASURE_COUNTER, \
+	  offsetof(struct _ns##_measure, _name) / sizeof(u64), 0 },
 #define MEASURE_META_G(_ns, _name, _desc) \
 	{ measure_string(stringify(_name)), measure_string(_desc), \
-	  MEASURE_GAUGE, 0, 0 },
+	  MEASURE_GAUGE, \
+	  offsetof(struct _ns##_measure, _name) / sizeof(u64), 0 },
 #define MEASURE_META_R(_ns, _name, _num, _den, _desc) \
 	{ measure_string(stringify(_name)), measure_string(_desc), \
 	  MEASURE_RATIO, \
@@ -369,9 +376,11 @@ typedef struct measure_metric {
  * See DEFINE_MEASURE_ALWAYS below for when that is the right trade.
  */
 #define MEASURE_META_C_ALWAYS(_ns, _name, _desc) \
-	{ stringify(_name), measure_string(_desc), MEASURE_COUNTER, 0, 0 },
+	{ stringify(_name), measure_string(_desc), MEASURE_COUNTER, \
+	  offsetof(struct _ns##_measure, _name) / sizeof(u64), 0 },
 #define MEASURE_META_G_ALWAYS(_ns, _name, _desc) \
-	{ stringify(_name), measure_string(_desc), MEASURE_GAUGE, 0, 0 },
+	{ stringify(_name), measure_string(_desc), MEASURE_GAUGE, \
+	  offsetof(struct _ns##_measure, _name) / sizeof(u64), 0 },
 #define MEASURE_META_R_ALWAYS(_ns, _name, _num, _den, _desc) \
 	{ stringify(_name), measure_string(_desc), MEASURE_RATIO, \
 	  offsetof(struct _ns##_measure, _num) / sizeof(u64), \
@@ -467,7 +476,7 @@ measure_read(const measure_metric *meta, const u64 *vals, unsigned i)
 {
 	if (meta[i].kind == MEASURE_RATIO)
 		return measure_pct(vals[meta[i].num], vals[meta[i].den]);
-	return vals[i];
+	return vals[meta[i].num];
 }
 #define measure_at(_ns, _m, _i) \
 	measure_read(_ns##_measure_meta, (const u64 *)(_m), (_i))
@@ -484,17 +493,18 @@ measure_sum(u64 *dst, const u64 *src, unsigned nfield)
 
 /* look up a stored field by name; returns &value or NULL (ratios excluded) */
 static inline u64 *
-measure_lookup(const measure_metric *meta, u64 *values, unsigned nfield,
+measure_lookup(const measure_metric *meta, u64 *values, unsigned count,
                const char *name)
 {
-	for (unsigned i = 0; i < nfield; i++)
-		if (!strcmp(meta[i].name, name))
-			return &values[i];
+	for (unsigned i = 0; i < count; i++)
+		if (meta[i].kind != MEASURE_RATIO &&
+		    !strcmp(meta[i].name, name))
+			return &values[meta[i].num];
 	return NULL;
 }
 #define measure_of(_ns, _m, _name) \
 	measure_lookup(_ns##_measure_meta, (u64 *)(_m), \
-	               measure_nfield(_ns), (_name))
+	               measure_count(_ns), (_name))
 
 /*
  * Attaching and bumping: two families
@@ -895,11 +905,19 @@ measure_diff(u64 *dst, const u64 *new_, const u64 *old, unsigned nfield)
  * not the array */
 #define measure_sparse(_ns)	(_ns##_measure_sparse)
 
-#ifdef CONFIG_MEASURE
+/*
+ * The local pointer a function counts through: DECLARE_MEASURE_SECTION(ns,
+ * &f->m, m) and then measure_inc(m, ...) for the rest of the body.
+ *
+ * It is declared in every build, CONFIG_MEASURE or not, because the off side
+ * of the namespaced counting macros still names its arguments - ((void)sizeof
+ * (_m)) - so that a variable read only by a counter does not become unused
+ * when the counting goes away. That only works if the name they are given
+ * exists, so this one has to. The struct is defined by DEFINE_MEASURE in
+ * either build and the pointer is _unused and never dereferenced without
+ * CONFIG_MEASURE, so nothing is emitted for it.
+ */
 #define DECLARE_MEASURE_SECTION(_ns, _ptr, _v) \
 	struct _ns##_measure *_v _unused = (_ptr)
-#else
-#define DECLARE_MEASURE_SECTION(_ns, _ptr, _v)
-#endif
 
 #endif

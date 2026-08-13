@@ -7,6 +7,10 @@
  * being asserted is that the two builds agree: the same argv parses to the
  * same values either way, and only the naming, the descriptions and the
  * options that need them (-S, -C, --dumpconfig) are gone.
+ *
+ * CONFIG_ENVIRONMENT is guarded the same way and asserted from both sides: with
+ * it on the readers are the environment, with it off they are the defaults they
+ * were handed, and the call the caller wrote is the same one either way.
  */
 
 #include <stdarg.h>
@@ -586,6 +590,149 @@ test_help_has_sections(void **state)
 	conf_free(ctx);
 }
 
+/*
+ * The other direction of the namespace: what the names are, and what each of
+ * them says about itself. A program that can be told `set net.backlog 256` is
+ * expected to be able to answer "what else is there" without its source.
+ */
+struct visit {
+	unsigned int	n;
+	char		seen[512];	/* "sec.attr=value " per attribute */
+	int		runtime;	/* of the last one visited         */
+	int		settable;
+	const char	*help;
+	const char	*arg;
+};
+
+static int
+visitor(const struct conf_desc *d, void *arg)
+{
+	struct visit *v = arg;
+	size_t len = strlen(v->seen);
+
+	snprintf(v->seen + len, sizeof(v->seen) - len, "%s.%s=%s ",
+	         d->section, d->name, d->value);
+	v->runtime = d->runtime;
+	v->settable = d->settable;
+	v->help = d->help;
+	v->arg = d->arg;
+	v->n++;
+	return 0;
+}
+
+static void
+test_walk_all(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct visit v;
+	char *argv[] = { "t", "--backlog", "256", "--listen", "1.2.3.4", NULL };
+
+	assert_int_equal(run(ctx, argv), 5);
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, NULL, visitor, &v), CONF_OK);
+
+	/* every attribute of every section, values and all */
+	assert_true(v.n >= 10);
+	assert_non_null(strstr(v.seen, "net.backlog=256 "));
+	assert_non_null(strstr(v.seen, "net.listen=1.2.3.4 "));
+	assert_non_null(strstr(v.seen, "log.level=error "));
+	assert_non_null(strstr(v.seen, "log.daemon=no "));
+	conf_free(ctx);
+}
+
+/* A prefix is a whole name, a section, or a stem of one. */
+static void
+test_walk_prefix(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct visit v;
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 4);
+	assert_null(strstr(v.seen, "log."));
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net.backlog", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 1);
+	assert_non_null(strstr(v.seen, "net.backlog="));
+
+	/* a bare attribute name, the spelling conf_set() also takes */
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "timeout", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 1);
+
+	/* and one that names nothing visits nothing, which is not an error */
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "nosuch", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 0);
+	conf_free(ctx);
+}
+
+/* What a walk reports about one attribute is what was declared about it — and
+ * @settable is the question an operator is actually asking, so it follows
+ * conf_running() while @runtime stays the declaration's own word. */
+static void
+test_walk_reports_the_declaration(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct visit v;
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net.backlog", visitor, &v), CONF_OK);
+	assert_string_equal(v.help, "Listen backlog");
+	assert_string_equal(v.arg, "N");
+	assert_false(v.runtime);
+	assert_true(v.settable);	/* startup is not over yet */
+
+	conf_running(ctx, 1);
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net.backlog", visitor, &v), CONF_OK);
+	assert_false(v.runtime);
+	assert_false(v.settable);	/* and now it would be refused */
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "log.timeout", visitor, &v), CONF_OK);
+	assert_true(v.runtime);
+	assert_true(v.settable);
+	conf_free(ctx);
+}
+
+static void
+test_describe_and_value(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct conf_desc d;
+	char buf[128], val[128];
+
+	assert_int_equal(conf_set(ctx, "net.backlog", "512"), CONF_OK);
+
+	assert_int_equal(conf_describe(ctx, "net.backlog", &d, buf, sizeof(buf)),
+	                 CONF_OK);
+	assert_string_equal(d.section, "net");
+	assert_string_equal(d.name, "backlog");
+	assert_string_equal(d.value, "512");
+	assert_string_equal(d.help, "Listen backlog");
+	assert_true(d.readable);
+
+	/* the bare spelling reaches it too, and the value alone comes back
+	 * without a description to go with it */
+	assert_int_equal(conf_value(ctx, "backlog", val, sizeof(val)), CONF_OK);
+	assert_string_equal(val, "512");
+
+	assert_int_equal(conf_value(ctx, "nosuch", val, sizeof(val)),
+	                 CONF_UNKNOWN);
+	assert_int_equal(conf_describe(ctx, "nosuch", &d, buf, sizeof(buf)),
+	                 CONF_UNKNOWN);
+	conf_free(ctx);
+}
+
 #else /* !CONFIG_SECTION */
 
 /* The section entry points are stubs, and say so rather than pretending. */
@@ -643,6 +790,109 @@ test_help_is_bare(void **state)
 
 #endif /* CONFIG_SECTION */
 
+/* ---- the environment: the half CONFIG_ENVIRONMENT decides -------------- */
+
+/*
+ * Both builds run these, and they assert the same thing from two sides: what a
+ * reader returns is the environment with the symbol on and the default with it
+ * off, and nothing else about the call changes. A caller that passes the
+ * default it wants therefore compiles and behaves either way.
+ */
+
+static void
+env_put(const char *name, const char *value)
+{
+	assert_int_equal(setenv(name, value, 1), 0);
+}
+
+#ifdef CONFIG_ENVIRONMENT
+
+static void
+test_env_is_read(void **state)
+{
+	(void)state;
+
+	env_put("HPC_TEST_STR", "hello");
+	env_put("HPC_TEST_INT", "-7");
+	env_put("HPC_TEST_UINT", "4K");
+	env_put("HPC_TEST_U64", "0x10");
+	env_put("HPC_TEST_DOUBLE", "1.5");
+	env_put("HPC_TEST_BOOL", "yes");
+
+	assert_string_equal(conf_getenv("HPC_TEST_STR"), "hello");
+	assert_string_equal(conf_env_str("HPC_TEST_STR", "def"), "hello");
+	assert_int_equal(conf_env_int("HPC_TEST_INT", 1), -7);
+	assert_int_equal(conf_env_uint("HPC_TEST_UINT", 1), 4096);
+	assert_true(conf_env_u64("HPC_TEST_U64", 1) == 16);
+	assert_true(conf_env_double("HPC_TEST_DOUBLE", 0.0) == 1.5);
+	assert_int_equal(conf_env_bool("HPC_TEST_BOOL", 0), 1);
+}
+
+/*
+ * Unset, empty and malformed are one answer - the default - because an
+ * environment is inherited from something that has no idea this program is
+ * reading it, and a program that refuses to start over it fails where nobody
+ * is looking.
+ */
+static void
+test_env_falls_back(void **state)
+{
+	(void)state;
+
+	assert_int_equal(unsetenv("HPC_TEST_UNSET"), 0);
+	env_put("HPC_TEST_EMPTY", "");
+	env_put("HPC_TEST_JUNK", "not-a-number");
+
+	assert_null(conf_getenv("HPC_TEST_UNSET"));
+	assert_string_equal(conf_env_str("HPC_TEST_UNSET", "def"), "def");
+	assert_string_equal(conf_env_str("HPC_TEST_EMPTY", "def"), "def");
+	assert_int_equal(conf_env_int("HPC_TEST_EMPTY", 42), 42);
+	assert_int_equal(conf_env_int("HPC_TEST_JUNK", 42), 42);
+	assert_int_equal(conf_env_uint("HPC_TEST_JUNK", 42), 42);
+	assert_true(conf_env_u64("HPC_TEST_JUNK", 42) == 42);
+	assert_true(conf_env_double("HPC_TEST_JUNK", 0.5) == 0.5);
+	assert_int_equal(conf_env_bool("HPC_TEST_JUNK", 1), 1);
+}
+
+#else /* !CONFIG_ENVIRONMENT */
+
+/*
+ * The door is closed: the variables are set, and every reader answers as if
+ * they were not there at all.
+ */
+static void
+test_env_is_ignored(void **state)
+{
+	(void)state;
+
+	env_put("HPC_TEST_STR", "hello");
+	env_put("HPC_TEST_INT", "-7");
+	env_put("HPC_TEST_UINT", "4K");
+	env_put("HPC_TEST_U64", "0x10");
+	env_put("HPC_TEST_DOUBLE", "1.5");
+	env_put("HPC_TEST_BOOL", "yes");
+
+	assert_null(conf_getenv("HPC_TEST_STR"));
+	assert_string_equal(conf_env_str("HPC_TEST_STR", "def"), "def");
+	assert_int_equal(conf_env_int("HPC_TEST_INT", 1), 1);
+	assert_int_equal(conf_env_uint("HPC_TEST_UINT", 1), 1);
+	assert_true(conf_env_u64("HPC_TEST_U64", 1) == 1);
+	assert_true(conf_env_double("HPC_TEST_DOUBLE", 0.25) == 0.25);
+	assert_int_equal(conf_env_bool("HPC_TEST_BOOL", 0), 0);
+}
+
+/* A NULL default is a default, and comes back as it was given. */
+static void
+test_env_str_keeps_a_null_default(void **state)
+{
+	(void)state;
+
+	env_put("HPC_TEST_STR", "hello");
+	assert_null(conf_env_str("HPC_TEST_STR", NULL));
+}
+
+#endif /* CONFIG_ENVIRONMENT */
+
 int
 main(void)
 {
@@ -666,10 +916,21 @@ main(void)
 		cmocka_unit_test(test_config_file_errors),
 		cmocka_unit_test(test_dump_round_trip),
 		cmocka_unit_test(test_help_has_sections),
+		cmocka_unit_test(test_walk_all),
+		cmocka_unit_test(test_walk_prefix),
+		cmocka_unit_test(test_walk_reports_the_declaration),
+		cmocka_unit_test(test_describe_and_value),
 #else
 		cmocka_unit_test(test_section_api_is_stubbed),
 		cmocka_unit_test(test_section_options_are_gone),
 		cmocka_unit_test(test_help_is_bare),
+#endif
+#ifdef CONFIG_ENVIRONMENT
+		cmocka_unit_test(test_env_is_read),
+		cmocka_unit_test(test_env_falls_back),
+#else
+		cmocka_unit_test(test_env_is_ignored),
+		cmocka_unit_test(test_env_str_keeps_a_null_default),
 #endif
 	};
 	return cmocka_run_group_tests_name("conf", tests, NULL, NULL);

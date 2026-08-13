@@ -3,9 +3,17 @@
  * rather than by its option letter, which is what -S, a configuration file and
  * --dumpconfig all do.
  *
+ * And the other direction, which the same namespace is what makes possible:
+ * saying what the names are (conf_walk), what one of them holds (conf_value)
+ * and what the declaration said about it (conf_describe). A program that can be
+ * asked to change an attribute by name can be asked what its attributes are, and
+ * the answer is built from the same array getopt_long() runs on rather than
+ * written down a second time.
+ *
  * This whole file is CONFIG_SECTION - without it there are no section names
  * and no attribute descriptions in the binary to address, and <hpc/conf.h>
- * turns conf_set(), conf_load() and conf_dump() into stubs instead.
+ * turns conf_set(), conf_load(), conf_dump() and the three above into stubs
+ * instead.
  */
 
 #include <hpc/compiler.h>
@@ -341,49 +349,105 @@ conf_dump_readable(const struct conf_attr *attr)
 	       (attr->cls == CONF_CL_STATIC && attr->type != CONF_T_NONE);
 }
 
-static void
-conf_dump_value(FILE *f, const struct conf_attr *attr)
+/*
+ * The value as a reader would be shown it: what conf_dump() writes below, minus
+ * the quoting a file needs and a reader does not. Returns what was written, or 0
+ * for an attribute with no value behind it.
+ */
+static size_t
+conf_render(const struct conf_attr *attr, char *buf, size_t size)
 {
+	int n;
+
+	if (!size)
+		return 0;
+	buf[0] = '\0';
+
+	if (!conf_dump_readable(attr))
+		return 0;
+
 	if (attr->cls != CONF_CL_STATIC) {
-		fprintf(f, "%d", *(int *)attr->ptr);	/* switch, counter */
-		return;
+		n = snprintf(buf, size, "%d", *(int *)attr->ptr);
+		goto done;	/* a switch or a counter, both ints */
 	}
 
 	switch (attr->type) {
 	case CONF_T_BOOL:
-		fputs(*(int *)attr->ptr ? "yes" : "no", f);
+		n = snprintf(buf, size, "%s", *(int *)attr->ptr ? "yes" : "no");
 		break;
 	case CONF_T_INT:
-		fprintf(f, "%d", *(int *)attr->ptr);
+		n = snprintf(buf, size, "%d", *(int *)attr->ptr);
 		break;
 	case CONF_T_UINT:
-		fprintf(f, "%u", *(unsigned int *)attr->ptr);
+		n = snprintf(buf, size, "%u", *(unsigned int *)attr->ptr);
 		break;
 	case CONF_T_U64:
-		fprintf(f, "%llu", (unsigned long long)*(uint64_t *)attr->ptr);
+		n = snprintf(buf, size, "%llu",
+		             (unsigned long long)*(uint64_t *)attr->ptr);
 		break;
 	case CONF_T_DOUBLE:
-		fprintf(f, "%g", *(double *)attr->ptr);
+		n = snprintf(buf, size, "%g", *(double *)attr->ptr);
 		break;
 	case CONF_T_STRING:
-		conf_dump_string(f, *(char **)attr->ptr);
+		n = snprintf(buf, size, "%s", *(char **)attr->ptr ?
+		             *(char **)attr->ptr : "");
 		break;
 	case CONF_T_LOOKUP: {
 		int i = *(int *)attr->ptr;
 		const char * const *tab = attr->u.lookup;
-		unsigned int n = 0;
+		unsigned int count = 0;
 
-		while (tab && tab[n])
-			n++;
-		if (i >= 0 && (unsigned int)i < n)
-			conf_dump_string(f, tab[i]);
+		while (tab && tab[count])
+			count++;
+		/* out of range: say what it is rather than nothing */
+		if (i >= 0 && (unsigned int)i < count)
+			n = snprintf(buf, size, "%s", tab[i]);
 		else
-			fprintf(f, "%d", i);	/* out of range - say what it is */
+			n = snprintf(buf, size, "%d", i);
 		break;
 	}
 	default:
-		break;
+		return 0;
 	}
+
+done:
+	if (n < 0)
+		return 0;
+	return (size_t)n < size ? (size_t)n : size - 1;
+}
+
+/*
+ * The same value in the file's own syntax, which differs in one thing: the two
+ * shapes that are words rather than numbers are quoted, so that what is written
+ * reads back as one value however much space is in it.
+ */
+static void
+conf_dump_value(FILE *f, const struct conf_attr *attr)
+{
+	char buf[512];
+
+	if (attr->cls == CONF_CL_STATIC && attr->type == CONF_T_STRING) {
+		conf_dump_string(f, *(char **)attr->ptr);
+		return;
+	}
+	if (attr->cls == CONF_CL_STATIC && attr->type == CONF_T_LOOKUP) {
+		int i = *(int *)attr->ptr;
+		const char * const *tab = attr->u.lookup;
+		unsigned int count = 0;
+
+		while (tab && tab[count])
+			count++;
+		/* a name is quoted; an index that named nothing is written as
+		 * the number it is, so a reader can see what it was */
+		if (i >= 0 && (unsigned int)i < count)
+			conf_dump_string(f, tab[i]);
+		else
+			fprintf(f, "%d", i);
+		return;
+	}
+
+	if (conf_render(attr, buf, sizeof(buf)))
+		fputs(buf, f);
 }
 
 void
@@ -415,6 +479,138 @@ conf_dump(struct conf_ctx *ctx, FILE *f)
 			fputc('\n', f);
 		}
 	}
+}
+
+/*** Introspection: what the names are, and what they mean ***/
+
+/*
+ * Fill @d in from one item. @buf holds the rendered value and has to outlive
+ * @d, which is why it is the caller's and not a static: a walk that rendered
+ * into shared storage would hand a visitor that kept a description a value
+ * belonging to the next attribute.
+ */
+static void
+conf_desc_fill(struct conf_ctx *ctx, const struct conf_item *item,
+               struct conf_desc *d, char *buf, size_t size)
+{
+	const struct conf_attr *attr = item->attr;
+
+	d->section	= item->sec->name;
+	d->sechelp	= item->sec->help;
+	d->name		= attr->name;
+	d->arg		= attr->arg;
+	d->help		= attr->help;
+	d->lookup	= attr->type == CONF_T_LOOKUP ? attr->u.lookup : NULL;
+	d->letter	= attr->letter;
+	d->flags	= attr->flags;
+	d->count	= item->count;
+	d->runtime	= (attr->flags & CONF_RUNTIME) != 0;
+	/*
+	 * What a `set` would do with it right now, which is the question an
+	 * operator is actually asking. Before conf_running() everything is
+	 * settable; after it, only what said so — and a CONF_USER attribute
+	 * never was, its effect belonging to whoever drives getopt_long().
+	 */
+	d->settable	= attr->cls != CONF_CL_USER &&
+	                  (!ctx->running || d->runtime);
+	d->readable	= conf_render(attr, buf, size) > 0;
+	d->value	= buf;
+}
+
+/*
+ * Does @prefix select this item? A whole name, a section, or a stem of one:
+ * "net.tls.record-max" is that attribute, "net.tls" is its section, and "net"
+ * is every section under it. The dot has to be there for a stem — "net.t"
+ * naming net.tls would be a surprise, and a section is free to be a prefix of
+ * another's name.
+ */
+static int
+conf_prefix_match(const struct conf_item *item, const char *prefix, size_t len)
+{
+	const char *sec = item->sec->name;
+	size_t seclen;
+
+	if (!len)
+		return 1;
+	if (!sec)
+		return 0;
+
+	seclen = strlen(sec);
+
+	if (len == seclen && !strncmp(sec, prefix, len))
+		return 1;			/* the section itself */
+
+	if (len > seclen && prefix[seclen] == '.' &&
+	    !strncmp(sec, prefix, seclen))	/* section.attribute */
+		return !strcmp(item->attr->name, prefix + seclen + 1);
+
+	if (len < seclen && sec[len] == '.' && !strncmp(sec, prefix, len))
+		return 1;			/* a stem of the section */
+
+	/* and a bare attribute name, the spelling conf_set() also takes */
+	return !strcmp(item->attr->name, prefix);
+}
+
+int
+conf_walk(struct conf_ctx *ctx, const char *prefix, conf_visitor *fn, void *arg)
+{
+	size_t len = prefix ? strlen(prefix) : 0;
+	unsigned int i;
+
+	if (!fn)
+		return CONF_ERROR;
+
+	for (i = 0; i < ctx->nitems; i++) {
+		const struct conf_item *item = &ctx->items[i];
+		char buf[512];
+		struct conf_desc d;
+		int rc;
+
+		if (!item->attr->name || !conf_is_option(item->attr))
+			continue;
+		if (!conf_prefix_match(item, prefix, len))
+			continue;
+
+		conf_desc_fill(ctx, item, &d, buf, sizeof(buf));
+		if ((rc = fn(&d, arg)))
+			return rc;
+	}
+
+	return CONF_OK;
+}
+
+int
+conf_describe(struct conf_ctx *ctx, const char *name, struct conf_desc *desc,
+              char *buf, size_t size)
+{
+	int ambiguous;
+	struct conf_item *item = conf_find(ctx, name, &ambiguous);
+
+	if (ambiguous)
+		return conf_error(ctx, "`%s' is ambiguous, qualify it with a "
+		                  "section name", name);
+	if (!item)
+		return CONF_UNKNOWN;
+
+	conf_desc_fill(ctx, item, desc, buf, size);
+	return CONF_OK;
+}
+
+int
+conf_value(struct conf_ctx *ctx, const char *name, char *buf, size_t size)
+{
+	int ambiguous;
+	struct conf_item *item = conf_find(ctx, name, &ambiguous);
+
+	if (ambiguous)
+		return conf_error(ctx, "`%s' is ambiguous, qualify it with a "
+		                  "section name", name);
+	if (!item)
+		return CONF_UNKNOWN;
+	if (!conf_render(item->attr, buf, size))
+		return conf_error(ctx, "`%s' has no value to read: it is "
+		                  "handled where it is given", name);
+	return CONF_OK;
 }
 
 /*** Handlers behind CONF_SET_OPTION, CONF_FILE_OPTION, CONF_DUMP_OPTION ***/

@@ -75,4 +75,40 @@
 
 DEFINE_MEASURE(slab, SLAB_METRICS);
 
+/*
+ * Memory pool counters (<mem/mempool.h>), the same facility for the other
+ * allocator. Counts are in grains where the slab's are in blocks.
+ *
+ * Counters:
+ * - alloc:    runs handed out by mempool_alloc()
+ * - free:     runs returned by mempool_free()
+ * - grow:     runs made longer by mempool_grow(), in place or by moving
+ * - move:     ...of which relocated - copied to a fresh run
+ * - shrink:   runs cut shorter by mempool_shrink()
+ * - fail:     requests that returned NULL (no run of that length)
+ * - release:  gc passes that handed memory back to the host
+ * - reclaim:  grains released, summed across all passes
+ *
+ * Gauges:
+ * - used:     live grains
+ * - resident: grains the pool holds from the host - live plus idle
+ *
+ * Ratio:
+ * - usage:    used as a percent of resident
+ */
+#define MEMPOOL_METRICS(_ns, C, G, R) \
+	C(_ns, alloc,    "Runs handed out by mempool_alloc") \
+	C(_ns, free,     "Runs returned by mempool_free") \
+	C(_ns, grow,     "Runs grown, in place or by moving") \
+	C(_ns, move,     "Runs relocated by a grow") \
+	C(_ns, shrink,   "Runs cut shorter by mempool_shrink") \
+	C(_ns, fail,     "Requests that returned NULL") \
+	C(_ns, release,  "GC passes that released memory") \
+	C(_ns, reclaim,  "Grains released across all passes") \
+	G(_ns, used,     "Live grains") \
+	G(_ns, resident, "Grains held from the host: live plus idle") \
+	R(_ns, usage, used, resident, "Live grains as percent of resident")
+
+DEFINE_MEASURE(mempool, MEMPOOL_METRICS);
+
 #endif/*__HPC_MEM_MEASURE_H__*/

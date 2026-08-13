@@ -39,6 +39,14 @@
  * usable as payload. All times are in the same unit (milliseconds) as the @now
  * passed in, matching slab_gc(). For a build-time block size use struct
  * slab_cache_class in <mem/slab_cache_class.h>.
+ *
+ * Expiry and ownership: the reap frees a block with no way of telling whoever
+ * holds a pointer to it, so a TTL or idle timeout is only for caches whose
+ * owner finds out first — either the block carries no outside references at
+ * all, or its owner tests slab_cache_expired() and drops its pointer (with
+ * whatever unlinking that takes) before the reap runs, the way the flow
+ * layer's session table does. A cache whose blocks are held across gc by
+ * somebody the reap cannot see must pass ttl=0, idle=0 and free explicitly.
  */
 
 #ifndef __HPC_MEM_SLAB_CACHE_H__
@@ -176,15 +184,25 @@ slab_cache_expired(struct slab_cache *c, void *p, timestamp_t now)
 	return slab_cache_entry_expired(&c->ent[slab_index(&c->slab, p)], now);
 }
 
-/* slab_cache_free - explicitly release a block back to the slab. */
+/*
+ * slab_cache_free - explicitly release a block back to the slab.
+ *
+ * Only a block the cache still counts live goes back to the slab: a caller
+ * freeing a block the reap has already reclaimed would push it onto the free
+ * list a second time — two future allocations handed one block, and a free
+ * count above the committed count (the "used" gauge wraps). The stale free is
+ * still a caller bug (its pointer dangled from the moment the reap took the
+ * block, and the block may since have been handed to somebody else), but it
+ * must not corrupt the slab on top of it.
+ */
 static inline void
 slab_cache_free(struct slab_cache *c, void *p)
 {
 	struct slab_cache_entry *e = &c->ent[slab_index(&c->slab, p)];
-	if (e->used) {
-		e->used = 0;
-		c->live--;
-	}
+	if (!e->used)
+		return;
+	e->used = 0;
+	c->live--;
 	slab_free(&c->slab, p);
 }
 

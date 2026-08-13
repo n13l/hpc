@@ -96,6 +96,10 @@ run_unit() {
     run_unit test_slab_cache
 }
 
+@test "units: slab_compact cmocka group" {
+    run_unit test_slab_compact
+}
+
 # The lockless container variants only exist in an RCU build; see the
 # rcutest-$(CONFIG_RCU) gate in selftests/units/Kbuild.
 

@@ -1,49 +1,3 @@
-/*
- * Lock-free and asynch-safe logging capability
- *
- * The MIT License (MIT)
- *
- * Copyright (c) 2012-2018                          Daniel Kubec <n13l@rtfm.cz>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"),to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- *
- * Logging code use stack, asynch-safe calls and atomic write() operation.
- *
- * POSIX.1 says that write(2)s of less than PIPE_BUF bytes must be atomic.
- * The precise semantics depend on whether the file descriptor is nonblocking.
- *
- * https://tools.ietf.org/html/rfc5424
- * Asynch-safe syslog()
- *
- * Logging code support for outputting syslog, just uses the regular C library
- * syslog() function. The problem is that this function is not async signal safe,
- * mostly because of its use of the printf family of functions internally.
- * Annoyingly libvirt does not even need printf support here, because it has
- * already expanded the log message string.
- *
- * Following log line if LOG_CAP_TIME is defined:
- *
- *	 +- month           +- process id
- *	 |  +- day          |      +- thread id      +- message
- *	 |  |               |      |                 |
- *	 04-29 22:43:20.244 1000  1000               example:  Hi 
- */
 
 #include <stdio.h>
 #include <fcntl.h>
@@ -60,10 +14,53 @@
 #include <mem/alloc.h>
 #include <mem/stack.h>
 #include <sys/time.h>
-#include <hpc/log.h>
+
+#include <arch/os/linux/io/str.h>
 
 #include <unistd.h>
 #include <sys/syscall.h>
+
+#ifdef CONFIG_OS_LINUX_IO
+
+#include <arch/os/linux/io/io.h>
+
+#define log_sys_open(path, flags, mode)	_sys_open((path), (flags), (mode))
+#define log_sys_write(fd, buf, len)	_sys_write((fd), (buf), (len))
+#define log_sys_getpid()		((unsigned int)_sys_getpid())
+#define log_sys_exit(status)		_sys_exit(status)
+#define log_sys_err(ret)		((int)-(ret))
+#define log_sys_stdout			1
+#define log_sys_stderr			2
+
+static inline unsigned int compat_gettid(void)
+{
+	return (unsigned int)_syscall0(SYS_gettid);
+}
+
+static inline void log_sys_now(struct timeval *tv)
+{
+	_syscall2(SYS_gettimeofday, tv, 0);
+}
+
+static inline void log_sys_die(const char *file, int err)
+{
+	char num[24];
+
+	nolibc_say(log_sys_stderr, "file: ", file, ": ",
+	           nolibc_utoa((unsigned long)err, num, sizeof(num)),
+	           (const char *)0);
+	log_sys_exit(1);
+}
+
+#else
+
+#define log_sys_open(path, flags, mode)	open((path), (flags), (mode))
+#define log_sys_write(fd, buf, len)	write((fd), (buf), (len))
+#define log_sys_getpid()		((unsigned int)getpid())
+#define log_sys_exit(status)		exit(status)
+#define log_sys_err(ret)		errno
+#define log_sys_stdout			fileno(stdout)
+#define log_sys_stderr			fileno(stderr)
 
 #ifdef SYS_gettid
 static inline unsigned int compat_gettid(void)
@@ -84,23 +81,35 @@ static inline unsigned int compat_gettid(void)
 #error "SYS_gettid unavailable on this system"
 #endif
 
+static inline void log_sys_now(struct timeval *tv)
+{
+	gettimeofday(tv, NULL);
+}
 
-/* POSIX.1 requires PIPE_BUF to be at least 512 bytes. */
+static inline void log_sys_die(const char *file, int err)
+{
+	printf("file: %s:%d:%s\n", file, err, strerror(err));
+	log_sys_exit(EXIT_FAILURE);
+}
+
+#endif
+
+
 #ifndef PIPE_BUF
 #define PIPE_BUF 512
 #endif
 
 #ifndef LOG_USER
-#define LOG_USER        (1<<3)  /* random user-level messages */
+#define LOG_USER        (1<<3)
 #endif
 #ifndef LOG_DAEMON
-#define LOG_DAEMON      (3<<3)  /* system daemons */
+#define LOG_DAEMON      (3<<3)
 #endif
 #ifndef LOG_AUTH
-#define LOG_AUTH        (4<<3)  /* security/authorization messages */
+#define LOG_AUTH        (4<<3)
 #endif
 #ifndef LOG_AUTHPRIV
-#define LOG_AUTHPRIV    (10<<3) /* security/authorization messages (private) */ 
+#define LOG_AUTHPRIV    (10<<3)
 #endif
 
 static const char *type_names[] = {
@@ -129,13 +138,6 @@ enum log_out {
 static int log_caps = 0;
 static int log_type = 0;
 
-/*
- * The verbosity a build starts at (CONFIG_VERBOSE, scripts/Kconfig.compiler).
- * A program with a -v of its own assigns this from its options once they are
- * parsed; until then, and forever for a program that has no such option, this
- * is what the debug1() .. debug4() gates compare against. Built outside kbuild
- * there is no symbol and the historical default stands.
- */
 #ifndef CONFIG_VERBOSE
 #define CONFIG_VERBOSE 0
 #endif
@@ -151,34 +153,38 @@ static int started = 1;
 
 custom_log_fn log_msg_handler = NULL;
 
-#ifndef CONFIG_LOG_SILENT
-
 void
 log_open(const char *file)
 {
 	log_type = 0;
-	if (!strcmp(file, "stdout"))
+	if (!xstrcmp(file, "stdout"))
 		log_type = LOG_TYPE_STDOUT;
-	else if (!strcmp(file, "stderr"))
+	else if (!xstrcmp(file, "stderr"))
 		log_type = LOG_TYPE_STDERR;
 
 	switch (log_type) {
 	case LOG_TYPE_STDOUT:
-		log_fd = fileno(stdout);
+		log_fd = log_sys_stdout;
 		break;
 	case LOG_TYPE_STDERR:
-		log_fd = fileno(stderr);
+		log_fd = log_sys_stderr;
 		break;
-	default:
-		if (log_append)
-			log_fd = open(file, O_APPEND | O_RDWR , 0644);
-		else
-			log_fd = open(file, O_CREAT | O_RDWR | O_TRUNC, 0644);
+	default: {
+		long fd;
 
-		if (log_fd != -1)
+		if (log_append)
+			fd = log_sys_open(file, O_APPEND | O_RDWR, 0644);
+		else
+			fd = log_sys_open(file, O_CREAT | O_RDWR | O_TRUNC,
+			                  0644);
+
+		if (fd >= 0) {
+			log_fd = (int)fd;
 			break;
-		printf("file: %s:%d:%s\n", file, errno, strerror(errno));
-		exit(EXIT_FAILURE);
+		}
+		log_fd = -1;
+		log_sys_die(file, log_sys_err(fd));
+	}
 	}
 }
 
@@ -191,7 +197,7 @@ log_set_handler(custom_log_fn fn)
 void
 log_name(const char *name)
 {
-	snprintf(progname, sizeof(progname) - 1, "%s", name);
+	snprintf(progname, sizeof(progname), "%s", name);
 }
 
 void
@@ -211,10 +217,6 @@ log_getcaps(void)
 	return log_caps;
 }
 
-/* 
- * This functions returns the number of secs and usec elapsed since the program
- * was launched. 
- * */
 
 static inline void
 do_log_cap_timestamp(struct log_ctx *c)
@@ -222,9 +224,9 @@ do_log_cap_timestamp(struct log_ctx *c)
 	if (!(log_caps & LOG_CAP_TIMESTAMP))
 		return;
 	struct timeval now;
-	gettimeofday(&now, NULL);
+	log_sys_now(&now);
 	if (started) {
-		gettimeofday(&start, NULL);
+		log_sys_now(&start);
 		now = start;
 		started = 0;
 	}
@@ -233,58 +235,81 @@ do_log_cap_timestamp(struct log_ctx *c)
 	c->usec = now.tv_usec;
 }
 
-static inline int
-do_log_hdr_parse(struct log_ctx *c, char *p, int av)
+static int __attribute__((format(printf, 4, 5)))
+hdr_addf(char *msg, int sz, int cap, const char *fmt, ...)
+{
+	int rem = cap - sz, n;
+	va_list ap;
+
+	if (rem <= 0)
+		return cap;
+	va_start(ap, fmt);
+	n = vsnprintf(msg + sz, (size_t)rem, fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return sz;
+	sz += n;
+	return sz > cap ? cap : sz;
+}
+
+static int
+do_log_hdr_parse(struct log_ctx *c, char *p, int cap)
 {
 	int sz = 0;
 	do_log_cap_timestamp(c);
 	if (log_caps & LOG_CAP_LEVEL)
-		sz += snprintf(p + sz, av - sz, "%6s: ", type_names[c->type]);
+		sz = hdr_addf(p, sz, cap, "%6s: ", type_names[c->type]);
 	if (log_caps & LOG_CAP_TIMESTAMP)
-		sz += snprintf(p + sz, av - sz, "%08u.%06u ",c->secs, c->usec);
+		sz = hdr_addf(p, sz, cap, "%08u.%06u ", c->secs, c->usec);
 	if (log_caps & LOG_CAP_PID)
-		sz += snprintf(p + sz, av - sz, "%u ", getpid());
+		sz = hdr_addf(p, sz, cap, "%u ", log_sys_getpid());
 	if (log_caps & LOG_CAP_TID)
-		sz += snprintf(p + sz, av - sz, "%u ", compat_gettid());
+		sz = hdr_addf(p, sz, cap, "%u ", compat_gettid());
 	if (log_caps & LOG_CAP_NAME)
-		sz += snprintf(p + sz, av - sz, "[%s] ", progname);
+		sz = hdr_addf(p, sz, cap, "[%s] ", progname);
 	if (log_caps & LOG_CAP_MODULE)
-		sz += snprintf(p + sz, av - sz, "%s ", c->mod);
+		sz = hdr_addf(p, sz, cap, "%s ", c->mod);
 	if (log_caps & LOG_CAP_FN)
-		sz += snprintf(p + sz, av - sz, "%s:%s:%d ", 
-		               c->fn, c->file, c->line);
+		sz = hdr_addf(p, sz, cap, "%s:%s:%d ", c->fn, c->file, c->line);
 	return sz;
 }
 
- /*
- * Logging code use stack, asynch-safe calls and atomic write() operation.
- *
- * POSIX.1 says that write(2)s of less than PIPE_BUF bytes must be atomic.
- * The precise semantics depend on whether the file descriptor is nonblocking.
- *
- * http://man7.org/linux/man-pages/man7/signal-safety.7.html
- *
- * According to the man page signal(7), the POSIX function clock_gettime() is 
- * listed as a safe function which can be called safely from a signal handler. 
- */
+
+static void
+log_flush(char *msg, int sz)
+{
+	if (sz < 0)
+		sz = 0;
+	else if (sz > PIPE_BUF - 2)
+		sz = PIPE_BUF - 2;
+
+	msg[sz++] = '\n';
+	msg[sz] = '\0';
+
+	if (log_msg_handler)
+		log_msg_handler(msg, sz);
+	else if (log_fd != -1) {
+		if (log_sys_write(log_fd, msg, sz) < 0)
+			; /* best-effort async-safe write; nothing to do */
+	}
+}
 
 void
 __log_asynch_safe_atomic_vprintf(struct log_ctx *c, const char *fmt, va_list a)
 {
 	char msg[PIPE_BUF];
 	int sz = do_log_hdr_parse(c, msg, PIPE_BUF - 4);
-	char *p = msg + sz;
-
+	int rem = PIPE_BUF - sz - 2;
 	va_list args;
-	va_copy(args, a);
-	sz += vsnprintf(p, PIPE_BUF - sz - 2, fmt, args);
-	va_end(args);
+	int n;
 
-	p = msg + sz; *p++ = '\n'; *p++ = 0; sz += 1;
-	if (log_msg_handler)
-		log_msg_handler(msg, sz);
-	else if (log_fd != -1)
-		sz = write(log_fd, msg, sz);
+	va_copy(args, a);
+	n = vsnprintf(msg + sz, (size_t)rem, fmt, args);
+	va_end(args);
+	if (n > 0)
+		sz += (n < rem) ? n : rem - 1;
+
+	log_flush(msg, sz);
 }
 
 void
@@ -299,128 +324,92 @@ __log_asynch_safe_atomic_printf(struct log_ctx *ctx, const char *fmt, ...)
 	va_end(args);
 }
 
-static inline size_t
-strlcpy(char *dst, const char *src, size_t siz)
-{
-	char *d = dst;
-	const char *s = src;
-	size_t n = siz;
-
-	if (n != 0) {
-		while (--n != 0)
-			if ((*d++ = *s++) == '\0')
-				break;
-	}
-
-	if (n == 0) {
-		if (siz != 0)
-			*d = '\0';
-		while (*s++);
-	}
-
-	return(s - src - 1);
-}
-
-static inline size_t
-strlcat(char *dst, const char *src, size_t siz)
-{
-	char *d = dst;
-	const char *s = src;
-	int dlen, n = siz;
-
-	while (n-- != 0 && *d != '\0')
-		d++;
-	dlen = d - dst;
-	n = siz - dlen;
-
-	if (n == 0)
-		return(dlen + strlen(s));
-	while (*s != '\0') {
-		if (n != 1) {
-			*d++ = *s;
-			n--;
-		}
-		s++;
-	}
-	*d = '\0';
-
-	return(dlen + (s - src));
-}
-
-
 #define DUMP_WIDTH_LESS_INDENT(i) (16 -((i - (i > 6 ? 6:i) + 3) / 4))
+
+static void
+b16_format_row(char *buf, size_t bufsz, const char *indent,
+               const u8 *s, int off, int width, int len)
+{
+	char tmp[20];
+
+	xstrlcpy(buf, bufsz, indent);
+	snprintf(tmp, sizeof(tmp), "%04x - ", off);
+	xstrlcat(buf, bufsz, tmp);
+
+	for (int j = 0; j < width; j++) {
+		if (off + j >= len) {
+			xstrlcat(buf, bufsz, "   ");
+		} else {
+			unsigned char ch = s[off + j];
+			snprintf(tmp, sizeof(tmp), "%02x%c", ch,
+			         j == 7 ? '-' : ' ');
+			xstrlcat(buf, bufsz, tmp);
+		}
+	}
+
+	xstrlcat(buf, bufsz, "  ");
+	for (int j = 0; j < width; j++) {
+		unsigned char ch;
+		if (off + j >= len)
+			break;
+		ch = s[off + j];
+		snprintf(tmp, sizeof(tmp), "%c",
+		         (ch >= toascii(' ') && ch <= toascii('~')) ? ch : '.');
+		xstrlcat(buf, bufsz, tmp);
+	}
+}
+
+static void
+b16_emit(struct log_ctx *c, const char *prefix, const char *buf)
+{
+	char msg[PIPE_BUF];
+	int sz = do_log_hdr_parse(c, msg, PIPE_BUF - 4);
+	int room = PIPE_BUF - 2 - sz;
+	unsigned prefix_len, buf_len;
+	char *p = msg + sz;
+
+	if (room < 0)
+		room = 0;
+
+	prefix_len = prefix ? xstrlen(prefix) : 0;
+	if (prefix_len > (unsigned)room)
+		prefix_len = (unsigned)room;
+	memcpy(p, prefix, prefix_len);
+	p += prefix_len;
+	sz += (int)prefix_len;
+	room -= (int)prefix_len;
+
+	buf_len = xstrlen(buf);
+	if (buf_len > (unsigned)room)
+		buf_len = (unsigned)room;
+	memcpy(p, buf, buf_len);
+	sz += (int)buf_len;
+
+	log_flush(msg, sz);
+}
 
 static int
 b16_indent(struct log_ctx *c, const char *prefix, int ind, const u8 *s, int len)
 {
-	char msg[PIPE_BUF], buf[289], tmp[20], str[129];
-	int i, j, rows, dump_width, ret = 0;
-	unsigned char ch;
+	char buf[289], str[129];
+	int i, rows, dump_width;
 
 	if (ind < 0)
 		ind = 0;
-	if (ind) {
-		if (ind > 128)
-			ind = 128;
-		memset(str, ' ', ind);
-	}
-
+	if (ind > 128)
+		ind = 128;
+	memset(str, ' ', ind);
 	str[ind] = '\0';
+
 	dump_width = DUMP_WIDTH_LESS_INDENT(ind);
-	rows = (len / dump_width);
-	if ((rows * dump_width) < len)
-		rows++;
+	rows = (len + dump_width - 1) / dump_width;
 
 	for (i = 0; i < rows; i++) {
-		strlcpy(buf, str, sizeof(buf));
-		snprintf(tmp, sizeof(tmp), "%04x - ", i * dump_width);
-		strlcat(buf, tmp, sizeof(buf));
-
-		for (j = 0; j < dump_width; j++) {
-			if (((i * dump_width) + j) >= len) {
-				strlcat(buf, "   ", sizeof(buf));
-			} else {
-				ch = ((u8)*(s + i * dump_width + j)) & 0xff;
-				snprintf(tmp, sizeof(tmp), "%02x%c", ch, j == 7
-				         ? '-' : ' ');
-				strlcat(buf, tmp, sizeof(buf));
-			}
-		}
-
-		strlcat(buf, "  ", sizeof(buf));
-		for (j = 0; j < dump_width; j++) {
-			if (((i * dump_width) + j) >= len)
-				break;
-			ch = ((u8)*(s + i * dump_width + j)) & 0xff;
-			snprintf(tmp, sizeof(tmp), "%c",
-			        ((ch >= toascii(' ')) && (ch <= toascii('~'))) ?
-			        ch: '.');
-			strlcat(buf, tmp, sizeof(buf));
-		}
-
-		int sz = do_log_hdr_parse(c, msg, PIPE_BUF - 4);
-		unsigned buf_len = strlen(buf);
-
-		char *p = msg + sz; 
-		unsigned prefix_len = prefix ? strlen(prefix):0;
-		if (prefix_len) {
-			memcpy(p, prefix, prefix_len);
-			p += prefix_len;
-			sz += prefix_len;
-		}
-
-		sz += buf_len;
-		memcpy(p, buf, buf_len);
-		p += buf_len;
-	
-		*p++ = '\n'; *p++ = 0; sz += 1;
-		if (log_msg_handler) {
-			log_msg_handler(msg, sz);
-		} else if (log_fd != -1) {
-			sz = write(log_fd, msg, sz);
-		}
+		int off = i * dump_width;
+		b16_format_row(buf, sizeof(buf), str, s, off, dump_width, len);
+		b16_emit(c, prefix, buf);
 	}
-	return ret;
+	return 0;
 }
 
 void
@@ -432,5 +421,3 @@ __log_asynch_safe_atomic_write_b16(struct log_ctx *ctx, const char *prefix,
 
 	b16_indent(ctx, prefix, indent, buf, size);
 }
-
-#endif

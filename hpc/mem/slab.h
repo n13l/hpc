@@ -31,7 +31,10 @@
  * of two, typically derived from the path MTU - see slab_shift_for()). Every
  * block is addressed by index using a single shift, so allocation and address
  * translation are branch-free bit shifts. For a block size fixed at build time
- * use struct slab_class in <mem/slab_class.h> instead.
+ * use struct slab_class in <mem/slab_class.h> instead. A slab that trades the
+ * address-stability guarantee below for a shrink that can defragment - moving
+ * live blocks toward the front under a relocation callback - is struct
+ * slab_compact in <mem/slab_compact.h>.
  *
  * Reservation model
  * -----------------
@@ -136,6 +139,114 @@ struct slab_policy {
 	bool (*check)(struct slab *slab, int grow, void *arg);
 	void *arg;
 };
+
+/*
+ * Predefined policies - the two obvious factors, ready to drop in. They are
+ * plain initializers, so they fill a struct slab_class_policy just as well
+ * (the fields are the same on purpose), and everything in them is still
+ * rounded to whole grains at init, as any policy is.
+ *
+ * SLAB_POLICY_STATIC(n)
+ *     a fixed working set: @n blocks committed up front, no growth past
+ *     them, never a shrink. The policy for a slab sized by contract rather
+ *     than by load.
+ *
+ * SLAB_POLICY_GRADUAL(min, max, dwell_ms)
+ *     by halves, both directions: at 75% usage commit half of the remaining
+ *     headroom, and once usage has stayed at/under 25% for @dwell_ms release
+ *     half of the free blocks per interval. Committed walks toward the
+ *     demand from either side, halving the distance each step - responsive
+ *     without ever betting everything on one sample.
+ *
+ * SLAB_POLICY_EAGER(min, max, dwell_ms)
+ *     whole steps: the first grow commits everything up to @max, and once
+ *     usage has stayed at/under 25% for @dwell_ms every free block goes back
+ *     at once, down to @min or the live set. For work that is bursty and
+ *     all-or-nothing, where holding half measures between bursts is just
+ *     resident memory. @dwell_ms of 0 returns the memory on the first
+ *     eligible gc.
+ *
+ * The watermarks are the same in both so the factor is the only difference;
+ * exhaustion grows regardless (the slab's own rule), the watermark only grows
+ * ahead of it.
+ */
+#define SLAB_POLICY_STATIC(_n) { \
+	.min = (_n), .max = (_n), \
+}
+
+#define SLAB_POLICY_GRADUAL(_min, _max, _dwell_ms) { \
+	.min = (_min), .max = (_max), \
+	.grow_step = ((_max) - (_min)) / 2, \
+	.grow_usage_pct = 75, \
+	.shrink_usage_pct = 25, \
+	.shrink_release_pct = 50, \
+	.shrink_after = (_dwell_ms), \
+}
+
+#define SLAB_POLICY_EAGER(_min, _max, _dwell_ms) { \
+	.min = (_min), .max = (_max), \
+	.grow_step = (_max) - (_min), \
+	.grow_usage_pct = 75, \
+	.shrink_usage_pct = 25, \
+	.shrink_release_pct = 100, \
+	.shrink_after = (_dwell_ms), \
+}
+
+/*
+ * The build's default, selected in Kconfig (CONFIG_MEM_SLAB_POLICY_*, with
+ * CONFIG_MEM_SLAB_SHRINK_AFTER as the dwell): what a slab gets when its owner
+ * has no opinion. A build with no Kconfig gets gradual with a 30 s dwell, the
+ * same defaults the Kconfig declares.
+ */
+#ifdef CONFIG_MEM_SLAB_SHRINK_AFTER
+#define SLAB_SHRINK_AFTER_DEFAULT ((timestamp_t)CONFIG_MEM_SLAB_SHRINK_AFTER)
+#else
+#define SLAB_SHRINK_AFTER_DEFAULT ((timestamp_t)30000)
+#endif
+
+#if defined(CONFIG_MEM_SLAB_POLICY_STATIC)
+# define SLAB_POLICY_DEFAULT_NAME "static"
+# define SLAB_POLICY_DEFAULT(_min, _max) SLAB_POLICY_STATIC(_max)
+#elif defined(CONFIG_MEM_SLAB_POLICY_EAGER)
+# define SLAB_POLICY_DEFAULT_NAME "eager"
+# define SLAB_POLICY_DEFAULT(_min, _max) \
+	SLAB_POLICY_EAGER(_min, _max, SLAB_SHRINK_AFTER_DEFAULT)
+#else
+# define SLAB_POLICY_DEFAULT_NAME "gradual"
+# define SLAB_POLICY_DEFAULT(_min, _max) \
+	SLAB_POLICY_GRADUAL(_min, _max, SLAB_SHRINK_AFTER_DEFAULT)
+#endif
+
+/*
+ * slab_policy_preset - fill @p with a preset picked by name at run time.
+ *
+ * The bridge from a configuration file to the macros above: @name is one of
+ * "static", "gradual" or "eager"; NULL or the empty string resolves to the
+ * build default (SLAB_POLICY_DEFAULT_NAME). @min, @max and @dwell parameterize
+ * the preset exactly as the macros take them; "static" uses only @max.
+ * Returns 0, or -1 for a name that is no preset - @p is untouched then, so a
+ * caller validating configuration can probe with a throwaway struct.
+ */
+static inline int
+slab_policy_preset(struct slab_policy *p, const char *name,
+                   u32 min, u32 max, timestamp_t dwell)
+{
+	if (!name || !*name)
+		name = SLAB_POLICY_DEFAULT_NAME;
+	if (!strcmp(name, "static")) {
+		struct slab_policy pol = SLAB_POLICY_STATIC(max);
+		*p = pol;
+	} else if (!strcmp(name, "gradual")) {
+		struct slab_policy pol = SLAB_POLICY_GRADUAL(min, max, dwell);
+		*p = pol;
+	} else if (!strcmp(name, "eager")) {
+		struct slab_policy pol = SLAB_POLICY_EAGER(min, max, dwell);
+		*p = pol;
+	} else {
+		return -1;
+	}
+	return 0;
+}
 
 /*
  * Event measurement. The slab keeps a pointer to a caller-owned
@@ -350,6 +461,7 @@ __slab_retire(struct slab *slab, unsigned shift, u32 n, u32 *from, u32 *to)
 	u32 used = slab->committed - slab->avail;
 	u32 old = slab->committed;
 	u32 reclaimed = 0, head = SLAB_NIL, cnt = 0, i;
+	struct slab_node *tail = NULL;
 
 	if (floor < used)             /* live blocks are never reclaimable */
 		floor = used;
@@ -368,18 +480,27 @@ __slab_retire(struct slab *slab, unsigned shift, u32 n, u32 *from, u32 *to)
 	if (!reclaimed)
 		return 0;
 
-	/* Rebuild the free list, dropping the reclaimed tail indices. */
+	/* Rebuild the free list, dropping the reclaimed tail indices. The
+	 * surviving nodes keep their order (append, not push): an owner that
+	 * keeps the list sorted - the compacting slab sorts it ascending so
+	 * allocations fill from the front - must not find it reversed by a
+	 * shrink. */
 	for (i = slab->list; i != SLAB_NIL; ) {
 		struct slab_node *node = (struct slab_node *)
 			__slab_at(slab, shift, i);
 		u32 next = node->avail;
 		if (i < slab->committed) {
-			node->avail = head;
-			head = i;
+			if (tail)
+				tail->avail = i;
+			else
+				head = i;
+			tail = node;
 			cnt++;
 		}
 		i = next;
 	}
+	if (tail)
+		tail->avail = SLAB_NIL;
 	slab->list = head;
 	slab->avail = cnt;
 
@@ -720,6 +841,28 @@ slab_committed_bytes(struct slab *slab)
 {
 	return (u64)slab->committed << slab->shift;
 }
+
+/* Bytes the live blocks cover: what of the committed memory is actually used. */
+static inline u64
+slab_used_bytes(struct slab *slab)
+{
+	return (u64)slab_used(slab) << slab->shift;
+}
+
+/*
+ * slab_measure_attach - point the slab at caller-owned event counters.
+ *
+ * The struct is declared by measure_member(slab) (<mem/measure.h>); several
+ * slabs may share one to aggregate, and NULL detaches. A no-op without
+ * CONFIG_MEASURE, where the member does not exist (same shape as
+ * rbtree_measure_attach in <hpc/rbtree.h>).
+ */
+#ifdef CONFIG_MEASURE
+#define slab_measure_attach(_slab, _m) \
+	do { (_slab)->measure = (_m); } while (0)
+#else
+#define slab_measure_attach(_slab, _m) ((void)0)
+#endif
 
 static inline void *
 slab_at(struct slab *slab, u32 index)

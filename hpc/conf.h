@@ -70,6 +70,23 @@
  * CONF_SET_OPTION, CONF_FILE_OPTION and CONF_DUMP_OPTION expand to an inert
  * slot, so the options themselves disappear from the command line. Source that
  * compiled with sections on still compiles with them off.
+ *
+ * CONFIG_ENVIRONMENT
+ * ------------------
+ *
+ * The other place a value can come from is the environment, and it is the one
+ * place a program does not choose: whoever starts it sets it. conf_getenv() and
+ * the typed conf_env_*() readers below are the single door onto getenv(), and
+ * the symbol decides whether that door is open. With it off conf_getenv()
+ * returns NULL, every typed reader hands back the default it was given, and the
+ * names looked up are never named by the code doing the looking - so a build
+ * that says N is a build whose configuration is a property of the binary and of
+ * its command line, not of the environment it was started in.
+ *
+ * Nothing else changes: a knob read this way is still declared, still reachable
+ * from --option, -S and a configuration file, and the source is the same either
+ * way. Read the environment through these and a program inherits the switch;
+ * call getenv() directly and it does not.
  */
 
 #ifndef __HPC_CONF_H__
@@ -79,6 +96,7 @@
 #include <getopt.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 struct mm;
 struct conf_ctx;
@@ -455,6 +473,38 @@ int conf_handle_help(struct conf_ctx *ctx, const struct conf_attr *attr,
 
 /*** Sections ***/
 
+/**
+ * One attribute, as something to show a reader: where it lives, what it holds
+ * now, and what its declaration says about it. Every pointer is either the
+ * declaration's own string - which outlives the walk - or, for @value, a buffer
+ * belonging to the caller.
+ *
+ * Declared whether or not CONFIG_SECTION is on, like the rest of this API: a
+ * program that reports its own configuration still compiles without sections,
+ * it simply has nothing to report (conf_walk() below).
+ */
+struct conf_desc {
+	const char *section;		/* namespace, "net.tls"; NULL if unnamed */
+	const char *sechelp;		/* the section's headline in --help      */
+	const char *name;		/* attribute name, "record-max"          */
+	const char *arg;		/* metavar: "BYTES", "0|1", NULL         */
+	const char *help;		/* description; may hold newlines        */
+	const char *value;		/* what it holds now, rendered           */
+	const char * const *lookup;	/* CONF_T_LOOKUP's names, else NULL      */
+	int letter;			/* short option, 0 for none              */
+	unsigned int flags;		/* the CONF_* the declaration carries    */
+	unsigned int count;		/* times it has been given               */
+	int runtime;			/* declared CONF_RUNTIME                 */
+	int settable;			/* would a change be accepted right now  */
+	int readable;			/* @value is a value, not an empty string */
+};
+
+/**
+ * Called once per attribute by conf_walk(), in registration order. Return
+ * anything but 0 to stop the walk; conf_walk() hands that value back.
+ */
+typedef int conf_visitor(const struct conf_desc *desc, void *arg);
+
 #ifdef CONFIG_SECTION
 
 /**
@@ -485,6 +535,40 @@ int conf_load(struct conf_ctx *ctx, const char *path);
 
 /** Write every attribute as "<section>.<attribute> <value>", in that syntax. */
 void conf_dump(struct conf_ctx *ctx, FILE *f);
+
+/*** Reading the configuration back ***/
+
+/**
+ * Show @fn every attribute whose name @prefix selects, or every attribute when
+ * @prefix is NULL. A prefix may be a whole name ("net.tls.record-max"), a
+ * section ("net.tls"), or a stem of one ("net", which selects net.tls and
+ * net.tcp alike). Returns CONF_OK, or whatever a visitor stopped with.
+ *
+ * This is the introspection half of the namespace: conf_set() reaches one
+ * attribute by name, and this is how a program says what names there are - a
+ * running daemon answering "what can I be asked", a --help that is a table
+ * rather than prose, a report of what is in force beside what it means.
+ */
+int conf_walk(struct conf_ctx *ctx, const char *prefix, conf_visitor *fn,
+              void *arg);
+
+/**
+ * One attribute by name, in the spelling conf_set() takes - qualified, or bare
+ * where that is unambiguous. @buf is where the rendered value is put and must
+ * outlive @desc. Returns CONF_OK, CONF_UNKNOWN if there is no such attribute,
+ * or CONF_ERROR when the name is ambiguous.
+ */
+int conf_describe(struct conf_ctx *ctx, const char *name, struct conf_desc *desc,
+                  char *buf, size_t size);
+
+/**
+ * The value alone, rendered into @buf the way conf_dump() would write it (a
+ * string unquoted, a lookup by name, a boolean as yes/no). Returns CONF_OK,
+ * CONF_UNKNOWN for no such attribute, or CONF_ERROR for an ambiguous name or an
+ * attribute with no value behind it - a handler's, whose effect went somewhere
+ * this cannot see.
+ */
+int conf_value(struct conf_ctx *ctx, const char *name, char *buf, size_t size);
 
 int conf_handle_set(struct conf_ctx *ctx, const struct conf_attr *attr,
                     const char *value, void *data);
@@ -522,6 +606,33 @@ conf_dump(struct conf_ctx *ctx, FILE *f)
 	(void)ctx; (void)f;
 }
 
+/*
+ * There are no names in the binary to walk and no descriptions to walk them
+ * with, so the walk visits nothing and says so. A caller that prints a table of
+ * its configuration prints an empty one rather than being written twice.
+ */
+static inline int
+conf_walk(struct conf_ctx *ctx, const char *prefix, conf_visitor *fn, void *arg)
+{
+	(void)ctx; (void)prefix; (void)fn; (void)arg;
+	return CONF_UNKNOWN;
+}
+
+static inline int
+conf_describe(struct conf_ctx *ctx, const char *name, struct conf_desc *desc,
+              char *buf, size_t size)
+{
+	(void)ctx; (void)name; (void)desc; (void)buf; (void)size;
+	return CONF_UNKNOWN;
+}
+
+static inline int
+conf_value(struct conf_ctx *ctx, const char *name, char *buf, size_t size)
+{
+	(void)ctx; (void)name; (void)buf; (void)size;
+	return CONF_UNKNOWN;
+}
+
 #endif /* CONFIG_SECTION */
 
 /*** Value parsers ***/
@@ -537,6 +648,104 @@ const char *conf_parse_u64(const char *str, uint64_t *ptr);
 const char *conf_parse_double(const char *str, double *ptr);
 const char *conf_parse_bool(const char *str, int *ptr);
 const char *conf_parse_lookup(const char *str, const char * const *tab, int *ptr);
+
+/*** The environment ***/
+
+/**
+ * The environment as this package reads it: one variable by name, NULL when it
+ * is unset - and NULL always, without CONFIG_ENVIRONMENT. Kept a header inline
+ * on purpose, so that reaching the environment through the switch costs a
+ * program nothing it was not already linking: with the symbol on this is
+ * getenv() and with it off it is a constant, and neither pulls in this module.
+ *
+ * An empty value is a value, and answering that question is the caller's: the
+ * typed readers below treat it as unset, which is what a variable exported with
+ * nothing in it nearly always means.
+ */
+static inline const char *
+conf_getenv(const char *name)
+{
+#ifdef CONFIG_ENVIRONMENT
+	return getenv(name);
+#else
+	(void)name;
+	return NULL;
+#endif
+}
+
+/*
+ * A value out of the environment, parsed, with what to use when there is not
+ * one. Each takes the same shape: @def comes back if the variable is unset, is
+ * empty, or does not parse - a program started with a typo in its environment
+ * runs on its defaults rather than refusing to start - and each is a call the
+ * whole of which CONFIG_ENVIRONMENT decides.
+ *
+ * The integer readers accept what conf_parse_*() accept, radix prefixes and a
+ * trailing K, M, G or T included; conf_env_bool() accepts 1/0, y/n, yes/no,
+ * true/false and on/off.
+ *
+ * conf_env_str() hands back the environment's own string, which lives as long
+ * as the variable is not overwritten - copy it if it must outlive that.
+ */
+#ifdef CONFIG_ENVIRONMENT
+
+const char *conf_env_str(const char *name, const char *def);
+int conf_env_int(const char *name, int def);
+unsigned int conf_env_uint(const char *name, unsigned int def);
+uint64_t conf_env_u64(const char *name, uint64_t def);
+double conf_env_double(const char *name, double def);
+int conf_env_bool(const char *name, int def);
+
+#else /* !CONFIG_ENVIRONMENT */
+
+/*
+ * There is nothing to read and nothing to parse it with, so each reader is the
+ * default it was handed. The names of the variables are the callers' string
+ * literals and go the way the section names do: nothing refers to them.
+ */
+static inline const char *
+conf_env_str(const char *name, const char *def)
+{
+	(void)name;
+	return def;
+}
+
+static inline int
+conf_env_int(const char *name, int def)
+{
+	(void)name;
+	return def;
+}
+
+static inline unsigned int
+conf_env_uint(const char *name, unsigned int def)
+{
+	(void)name;
+	return def;
+}
+
+static inline uint64_t
+conf_env_u64(const char *name, uint64_t def)
+{
+	(void)name;
+	return def;
+}
+
+static inline double
+conf_env_double(const char *name, double def)
+{
+	(void)name;
+	return def;
+}
+
+static inline int
+conf_env_bool(const char *name, int def)
+{
+	(void)name;
+	return def;
+}
+
+#endif /* CONFIG_ENVIRONMENT */
 
 __END_DECLS
 

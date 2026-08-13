@@ -7,3 +7,8 @@ obj-y += ctx.o parse.o getopt.o help.o
 # and --dumpconfig - has nothing to address without section names, so it is not
 # compiled at all; <hpc/conf.h> replaces its entry points with stubs.
 obj-$(CONFIG_SECTION) += section.o
+
+# The environment readers. Nothing addresses them without CONFIG_ENVIRONMENT -
+# <hpc/conf.h> turns every one into the default it was handed - so the file is
+# not compiled and the parsers it would have called keep their other callers.
+obj-$(CONFIG_ENVIRONMENT) += env.o
