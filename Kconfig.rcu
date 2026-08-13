@@ -1,0 +1,59 @@
+#
+# hpc RCU options: which liburcu flavour <hpc/rcu.h> binds to.
+#
+# In a file of its own for the reason the memory options are (Kconfig.mem): a
+# tree that embeds this package sources the same definitions instead of keeping
+# a copy of them in step by hand. hpc's own Kconfig sources it where the block
+# used to be, so nothing about a standalone hpc build changes.
+#
+#
+# CONFIG_THREADS and CONFIG_RCU themselves are declared once, in the shared
+# scripts/Kconfig.compiler (kbuild submodule), so hpc, crypto and un see the
+# same symbols. CONFIG_RCU turns on the lockless variants of the intrusive
+# containers - <hpc/queue.h>, <hpc/rbtree.h>, <hpc/hash/table.h> - which bind to
+# the vendored liburcu (vendor/userspace-rcu) through <hpc/rcu.h>. What is
+# hpc-specific, and lives here, is which liburcu flavour that binding uses:
+# the choice below picks both the header and the archive that gets linked, so
+# readers can never end up paired with another flavour's grace periods.
+#
+
+choice
+	prompt "RCU flavour (liburcu)"
+	depends on RCU
+	default RCU_MEMB
+	help
+	  Which liburcu flavour <hpc/rcu.h> binds to. It selects the read-side
+	  cost and what a read-side thread owes the implementation; the vendored
+	  liburcu is built and linked to match.
+
+config RCU_MEMB
+	bool "memb - sys_membarrier (default)"
+	help
+	  Readers do plain loads and stores, writers force the barrier on every
+	  other thread with sys_membarrier(). The best default: a read side
+	  nearly as cheap as QSBR with none of its obligations. Each thread
+	  entering a read-side section must call rcu_register_thread() first.
+
+	  Falls back to a signal-based scheme where the kernel has no
+	  membarrier support.
+
+	  If unsure, say Y.
+
+config RCU_QSBR
+	bool "qsbr - quiescent-state based"
+	help
+	  The cheapest read side available - read-side sections cost nothing at
+	  all - in exchange for an obligation: nothing marks where a reader is
+	  done, so every read-side thread must announce a quiescent state
+	  itself, with rcu_quiescent_state(), often enough that writers make
+	  progress. For hot loops that can be instrumented that way.
+
+config RCU_BP
+	bool "bp - bulletproof"
+	help
+	  Registers a thread on its first read-side section and needs no
+	  unregistration, at the price of a slower read side. For code that is
+	  loaded into a process it does not own (a library, a plugin) and so
+	  cannot make every thread register.
+
+endchoice

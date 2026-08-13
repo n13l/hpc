@@ -59,3 +59,15 @@ target and its type: the option parsing is unchanged, the command line is
 identical, and source that compiled with sections on compiles with them off
 (`conf_set()`, `conf_load()` and `conf_dump()` become inline stubs and `--help`
 lists the options without descriptions).
+
+**CONFIG_ENVIRONMENT** (*Library options*) decides the other source a value can
+come from — the one the program does not choose, since whoever starts it sets
+it. `conf_getenv()` and the typed `conf_env_str()`, `conf_env_int()`,
+`conf_env_uint()`, `conf_env_u64()`, `conf_env_double()` and `conf_env_bool()`
+readers over it are the single door onto `getenv()`. With the symbol off that
+door is closed: `conf_getenv()` is NULL, each typed reader is the default it was
+handed, the module behind them is not compiled, and the variable names stop
+being named by the code that looked them up. Every knob stays reachable from the
+command line, from `-S` and from a file, and the source is the same either way —
+so a build that says N is one whose configuration is a property of the binary
+rather than of the environment it was started in.

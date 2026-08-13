@@ -70,6 +70,23 @@
  * CONF_SET_OPTION, CONF_FILE_OPTION and CONF_DUMP_OPTION expand to an inert
  * slot, so the options themselves disappear from the command line. Source that
  * compiled with sections on still compiles with them off.
+ *
+ * CONFIG_ENVIRONMENT
+ * ------------------
+ *
+ * The other place a value can come from is the environment, and it is the one
+ * place a program does not choose: whoever starts it sets it. conf_getenv() and
+ * the typed conf_env_*() readers below are the single door onto getenv(), and
+ * the symbol decides whether that door is open. With it off conf_getenv()
+ * returns NULL, every typed reader hands back the default it was given, and the
+ * names looked up are never named by the code doing the looking - so a build
+ * that says N is a build whose configuration is a property of the binary and of
+ * its command line, not of the environment it was started in.
+ *
+ * Nothing else changes: a knob read this way is still declared, still reachable
+ * from --option, -S and a configuration file, and the source is the same either
+ * way. Read the environment through these and a program inherits the switch;
+ * call getenv() directly and it does not.
  */
 
 #ifndef __HPC_CONF_H__
@@ -79,6 +96,7 @@
 #include <getopt.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 struct mm;
 struct conf_ctx;
@@ -630,6 +648,104 @@ const char *conf_parse_u64(const char *str, uint64_t *ptr);
 const char *conf_parse_double(const char *str, double *ptr);
 const char *conf_parse_bool(const char *str, int *ptr);
 const char *conf_parse_lookup(const char *str, const char * const *tab, int *ptr);
+
+/*** The environment ***/
+
+/**
+ * The environment as this package reads it: one variable by name, NULL when it
+ * is unset - and NULL always, without CONFIG_ENVIRONMENT. Kept a header inline
+ * on purpose, so that reaching the environment through the switch costs a
+ * program nothing it was not already linking: with the symbol on this is
+ * getenv() and with it off it is a constant, and neither pulls in this module.
+ *
+ * An empty value is a value, and answering that question is the caller's: the
+ * typed readers below treat it as unset, which is what a variable exported with
+ * nothing in it nearly always means.
+ */
+static inline const char *
+conf_getenv(const char *name)
+{
+#ifdef CONFIG_ENVIRONMENT
+	return getenv(name);
+#else
+	(void)name;
+	return NULL;
+#endif
+}
+
+/*
+ * A value out of the environment, parsed, with what to use when there is not
+ * one. Each takes the same shape: @def comes back if the variable is unset, is
+ * empty, or does not parse - a program started with a typo in its environment
+ * runs on its defaults rather than refusing to start - and each is a call the
+ * whole of which CONFIG_ENVIRONMENT decides.
+ *
+ * The integer readers accept what conf_parse_*() accept, radix prefixes and a
+ * trailing K, M, G or T included; conf_env_bool() accepts 1/0, y/n, yes/no,
+ * true/false and on/off.
+ *
+ * conf_env_str() hands back the environment's own string, which lives as long
+ * as the variable is not overwritten - copy it if it must outlive that.
+ */
+#ifdef CONFIG_ENVIRONMENT
+
+const char *conf_env_str(const char *name, const char *def);
+int conf_env_int(const char *name, int def);
+unsigned int conf_env_uint(const char *name, unsigned int def);
+uint64_t conf_env_u64(const char *name, uint64_t def);
+double conf_env_double(const char *name, double def);
+int conf_env_bool(const char *name, int def);
+
+#else /* !CONFIG_ENVIRONMENT */
+
+/*
+ * There is nothing to read and nothing to parse it with, so each reader is the
+ * default it was handed. The names of the variables are the callers' string
+ * literals and go the way the section names do: nothing refers to them.
+ */
+static inline const char *
+conf_env_str(const char *name, const char *def)
+{
+	(void)name;
+	return def;
+}
+
+static inline int
+conf_env_int(const char *name, int def)
+{
+	(void)name;
+	return def;
+}
+
+static inline unsigned int
+conf_env_uint(const char *name, unsigned int def)
+{
+	(void)name;
+	return def;
+}
+
+static inline uint64_t
+conf_env_u64(const char *name, uint64_t def)
+{
+	(void)name;
+	return def;
+}
+
+static inline double
+conf_env_double(const char *name, double def)
+{
+	(void)name;
+	return def;
+}
+
+static inline int
+conf_env_bool(const char *name, int def)
+{
+	(void)name;
+	return def;
+}
+
+#endif /* CONFIG_ENVIRONMENT */
 
 __END_DECLS
 

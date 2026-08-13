@@ -4,7 +4,8 @@
 # the built binaries keep it, as the shared test runner discovers unit
 # executables via the units/test_* glob. The multi-object form maps each
 # test_<name> binary to its <name>.o source.
-cmockatest-$(CONFIG_CMOCKA) := test_sort test_slab test_slab_cache test_queue \
+cmockatest-$(CONFIG_CMOCKA) := test_sort test_slab test_slab_cache \
+			       test_slab_compact test_mempool test_queue \
 			       test_rbtree test_hashtable test_hashtable_cache \
 			       test_measure test_conf
 
@@ -27,6 +28,8 @@ cmockatest-$(CONFIG_CMOCKA) += $(rcutest-y)
 test_sort-y            := sort.o
 test_slab-y            := slab.o
 test_slab_cache-y      := slab_cache.o
+test_slab_compact-y    := slab_compact.o
+test_mempool-y         := mempool.o
 test_queue-y           := queue.o
 test_rbtree-y          := rbtree.o
 test_hashtable-y       := hashtable.o
@@ -56,6 +59,8 @@ logobj-$(CONFIG_LOGGING) := hpc/log/built-in.o
 CMOCKA_LIBS_test_sort            = hpc/built-in.o $(logobj-y)
 CMOCKA_LIBS_test_slab            = hpc/built-in.o $(logobj-y)
 CMOCKA_LIBS_test_slab_cache      = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_slab_compact    = hpc/built-in.o $(logobj-y)
+CMOCKA_LIBS_test_mempool         = hpc/built-in.o $(logobj-y)
 CMOCKA_LIBS_test_queue           = hpc/built-in.o $(logobj-y)
 CMOCKA_LIBS_test_rbtree          = hpc/built-in.o $(logobj-y)
 CMOCKA_LIBS_test_hashtable       = hpc/built-in.o $(logobj-y)

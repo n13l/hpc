@@ -49,92 +49,11 @@ endmenu
 menu "Library options"
 
 #
-# CONFIG_THREADS and CONFIG_RCU themselves are declared once, in the shared
-# scripts/Kconfig.compiler (kbuild submodule), so hpc, crypto and un see the
-# same symbols. CONFIG_RCU turns on the lockless variants of the intrusive
-# containers - <hpc/queue.h>, <hpc/rbtree.h>, <hpc/hash/table.h> - which bind to
-# the vendored liburcu (vendor/userspace-rcu) through <hpc/rcu.h>. What is
-# hpc-specific, and lives here, is which liburcu flavour that binding uses:
-# the choice below picks both the header and the archive that gets linked, so
-# readers can never end up paired with another flavour's grace periods.
+# The RCU flavour and the <hpc/conf.h> switch used to be spelled out here; they
+# are in files of their own now, for the reason the memory options are.
 #
-
-choice
-	prompt "RCU flavour (liburcu)"
-	depends on RCU
-	default RCU_MEMB
-	help
-	  Which liburcu flavour <hpc/rcu.h> binds to. It selects the read-side
-	  cost and what a read-side thread owes the implementation; the vendored
-	  liburcu is built and linked to match.
-
-config RCU_MEMB
-	bool "memb - sys_membarrier (default)"
-	help
-	  Readers do plain loads and stores, writers force the barrier on every
-	  other thread with sys_membarrier(). The best default: a read side
-	  nearly as cheap as QSBR with none of its obligations. Each thread
-	  entering a read-side section must call rcu_register_thread() first.
-
-	  Falls back to a signal-based scheme where the kernel has no
-	  membarrier support.
-
-	  If unsure, say Y.
-
-config RCU_QSBR
-	bool "qsbr - quiescent-state based"
-	help
-	  The cheapest read side available - read-side sections cost nothing at
-	  all - in exchange for an obligation: nothing marks where a reader is
-	  done, so every read-side thread must announce a quiescent state
-	  itself, with rcu_quiescent_state(), often enough that writers make
-	  progress. For hot loops that can be instrumented that way.
-
-config RCU_BP
-	bool "bp - bulletproof"
-	help
-	  Registers a thread on its first read-side section and needs no
-	  unregistration, at the price of a slower read side. For code that is
-	  loaded into a process it does not own (a library, a plugin) and so
-	  cannot make every thread register.
-
-endchoice
-
-#
-# Configuration options. <hpc/conf.h> lets a program declare its knobs once, as
-# attributes grouped into sections, and generates the getopt_long() tables, the
-# --help text and the sec.attr namespace from that one declaration. The symbol
-# below decides how much of it a build pays for.
-#
-
-config SECTION
-	bool "Configuration sections and attribute descriptions"
-	default y
-	help
-	  Keep the section names and the attribute descriptions that
-	  <hpc/conf.h> declarations carry, and the code that uses them:
-	  a --help text grouped by section, the <section>.<attribute>
-	  namespace behind -S and conf_set(), the configuration file reader
-	  behind -C, and --dumpconfig.
-
-	  Say N and none of that is in the binary. The gate is in the
-	  declaration macros themselves, not around the code that reads them:
-	  the section name, the section headline and every attribute's metavar
-	  and description stop being fields of the structures, so the string
-	  literals are never named and never linked. What is left of an
-	  attribute is its long name, its short letter, its target and its
-	  type - exactly what getopt_long() and the value parser need - and
-	  -S, -C and --dumpconfig disappear from the command line with the
-	  machinery behind them.
-
-	  What does not change is the program: option spellings are declared
-	  verbatim and a section is a namespace, never a prefix, so the command
-	  line is identical either way, and source that compiled with this on
-	  compiles with it off. conf_set(), conf_load() and conf_dump() become
-	  inline stubs and --help prints the option list without descriptions.
-
-	  Say N for a small statically linked tool that only needs its options
-	  parsed. If unsure, say Y.
+source "Kconfig.rcu"
+source "Kconfig.conf"
 
 #
 # Memory options — the slab reservation backend and the two madvise() hints

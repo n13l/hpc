@@ -78,6 +78,63 @@ config MEM_SLAB_MALLOC
 
 endchoice
 
+choice
+	prompt "Default slab grow/shrink policy"
+	default MEM_SLAB_POLICY_GRADUAL
+	help
+	  The policy a slab gets when its owner does not choose one: what
+	  SLAB_POLICY_DEFAULT() in <mem/slab.h> expands to, and what the
+	  empty policy name resolves to in slab_policy_preset() - which is
+	  where a program's own configuration ("cache-policy = eager")
+	  lands when it names no preset. A slab initialized with an
+	  explicit policy is not affected.
+
+	  The choice is a factor: how much of the distance between the
+	  current working set and the demand one grow or shrink step
+	  covers. The watermarks are the same in every preset so the
+	  factor is the only difference.
+
+config MEM_SLAB_POLICY_GRADUAL
+	bool "Gradual - by halves"
+	help
+	  At 75% usage commit half of the remaining headroom; once usage
+	  has stayed at/under 25% for the dwell below, release half of
+	  the free blocks per interval. Committed walks toward the demand
+	  from either side, halving the distance each step - responsive
+	  without ever betting everything on one sample. The default, and
+	  the right answer for load that moves.
+
+config MEM_SLAB_POLICY_EAGER
+	bool "Eager - whole steps"
+	help
+	  The first grow commits everything up to the maximum, and one gc
+	  pass after the dwell returns every free block at once, down to
+	  the minimum or the live set. For work that is bursty and
+	  all-or-nothing, where holding half measures between bursts is
+	  just resident memory.
+
+config MEM_SLAB_POLICY_STATIC
+	bool "Static - a fixed working set"
+	help
+	  Commit the whole reservation up front and never grow or shrink.
+	  Memory use is decided at init and stays put: no faults after
+	  startup, no release ever - the policy for a deployment sized by
+	  contract rather than by load.
+
+endchoice
+
+config MEM_SLAB_SHRINK_AFTER
+	int "Idle dwell before releasing memory (ms)"
+	depends on !MEM_SLAB_POLICY_STATIC
+	default 30000
+	help
+	  How long usage must stay at/under the shrink watermark before
+	  the default policy releases memory. This is hysteresis: it stops
+	  a transient dip from thrashing the working set, and it is also
+	  the rate limit - at most one release per interval. 30 seconds
+	  suits a daemon watching traffic; an interactive tool that should
+	  give memory back promptly wants less.
+
 config MEM_HUGEPAGE
 	bool "Back slab reservations with transparent huge pages"
 	depends on MEM_SLAB_MMAP

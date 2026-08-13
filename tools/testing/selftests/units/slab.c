@@ -17,6 +17,9 @@
 #include <setjmp.h>
 #include <cmocka.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/mman.h>
 
 #include <hpc/compiler.h>
 
@@ -487,6 +490,268 @@ test_shrink_keeps_addresses_stable(void **state)
 	slab_fini(&vm);
 }
 
+/* ---- predefined policies --------------------------------------------------- */
+
+/* A fixed working set: the policy never moves it, in either direction. */
+static void
+test_policy_static(void **state)
+{
+	(void)state;
+	struct slab_policy pol = SLAB_POLICY_STATIC(4);
+	struct slab vm;
+	void *p[4];
+	int i;
+
+	assert_int_equal(slab_init(&vm, SLAB_GRAIN_BYTES, &pol), 0);
+	assert_int_equal(slab_committed(&vm), 4);
+
+	for (i = 0; i < 4; i++) {
+		p[i] = slab_alloc(&vm);
+		assert_non_null(p[i]);
+	}
+	assert_null(slab_alloc(&vm));            /* at max: no growth        */
+	for (i = 0; i < 4; i++)
+		slab_free(&vm, p[i]);
+
+	/* idle forever: shrinking is off, gc never releases a block */
+	assert_int_equal(slab_gc(&vm, 0), 0);
+	assert_int_equal(slab_gc(&vm, 1u << 30), 0);
+	assert_int_equal(slab_committed(&vm), 4);
+	slab_fini(&vm);
+}
+
+/*
+ * The 50% preset: committed walks toward the demand from either side,
+ * halving the distance each step - half the headroom up at 75% usage, half
+ * of the free blocks back per dwell interval at 25%.
+ */
+static void
+test_policy_gradual(void **state)
+{
+	(void)state;
+	struct slab_policy pol = SLAB_POLICY_GRADUAL(0, 16, 1000);
+	struct slab vm;
+	void *p[6];
+	int i;
+
+	assert_int_equal(slab_init(&vm, SLAB_GRAIN_BYTES, &pol), 0);
+	assert_int_equal(slab_committed(&vm), 0);
+
+	/* the first allocation grows half the headroom: 8 of 16 */
+	p[0] = slab_alloc(&vm);
+	assert_non_null(p[0]);
+	assert_int_equal(slab_committed(&vm), 8);
+
+	/* 6 of 8 is the 75% watermark: gc grows the other half */
+	for (i = 1; i < 6; i++)
+		p[i] = slab_alloc(&vm);
+	assert_int_equal(slab_gc(&vm, 0), 8);
+	assert_int_equal(slab_committed(&vm), 16);
+
+	/* drained: half of the free blocks per interval, 16 -> 8 -> 4 -> 2 */
+	for (i = 0; i < 6; i++)
+		slab_free(&vm, p[i]);
+	assert_int_equal(slab_gc(&vm, 100), 0);        /* arm the dwell */
+	assert_int_equal(slab_gc(&vm, 1100), -8);
+	assert_int_equal(slab_gc(&vm, 2100), -4);
+	assert_int_equal(slab_gc(&vm, 3100), -2);
+	assert_int_equal(slab_committed(&vm), 2);
+	slab_fini(&vm);
+}
+
+/*
+ * The 100% preset: the first grow commits the whole headroom, and one gc
+ * past the dwell hands every free block back at once.
+ */
+static void
+test_policy_eager(void **state)
+{
+	(void)state;
+	struct slab_policy pol = SLAB_POLICY_EAGER(2, 16, 0);
+	struct slab vm;
+	void *a, *b, *c;
+
+	assert_int_equal(slab_init(&vm, SLAB_GRAIN_BYTES, &pol), 0);
+	assert_int_equal(slab_committed(&vm), 2);
+
+	a = slab_alloc(&vm);
+	b = slab_alloc(&vm);
+	memset(a, 0x5a, slab_block_size(&vm));
+	memset(b, 0xa5, slab_block_size(&vm));
+
+	/* exhaustion commits everything up to max in one step */
+	c = slab_alloc(&vm);
+	assert_non_null(c);
+	assert_int_equal(slab_committed(&vm), 16);
+
+	/* the burst is over: everything unused goes back at once */
+	slab_free(&vm, c);
+	assert_int_equal(slab_gc(&vm, 0), -14);
+	assert_int_equal(slab_committed(&vm), 2);
+	assert_int_equal(slab_used(&vm), 2);
+
+	/* the survivors kept their addresses and bytes, as ever */
+	assert_int_equal(*(u8 *)a, 0x5a);
+	assert_int_equal(*(u8 *)b, 0xa5);
+	slab_fini(&vm);
+}
+
+/*
+ * The run-time bridge from a configuration file to the preset macros: names
+ * map to the same shapes the macros build, the empty name is the build
+ * default (CONFIG_MEM_SLAB_POLICY_*), and an unknown name is refused with
+ * the struct untouched - which is what lets a check() hook probe a value
+ * before it is committed.
+ */
+static void
+assert_policy_equal(const struct slab_policy *a, const struct slab_policy *b)
+{
+	assert_int_equal(a->min, b->min);
+	assert_int_equal(a->max, b->max);
+	assert_int_equal(a->grow_step, b->grow_step);
+	assert_int_equal(a->grow_usage_pct, b->grow_usage_pct);
+	assert_int_equal(a->shrink_usage_pct, b->shrink_usage_pct);
+	assert_int_equal(a->shrink_release_pct, b->shrink_release_pct);
+	assert_int_equal(a->shrink_after, b->shrink_after);
+}
+
+static void
+test_policy_preset_by_name(void **state)
+{
+	(void)state;
+	struct slab_policy want, got;
+
+	{
+		struct slab_policy p = SLAB_POLICY_STATIC(16);
+		want = p;
+	}
+	assert_int_equal(slab_policy_preset(&got, "static", 2, 16, 500), 0);
+	assert_policy_equal(&got, &want);
+
+	{
+		struct slab_policy p = SLAB_POLICY_GRADUAL(2, 16, 500);
+		want = p;
+	}
+	assert_int_equal(slab_policy_preset(&got, "gradual", 2, 16, 500), 0);
+	assert_policy_equal(&got, &want);
+
+	{
+		struct slab_policy p = SLAB_POLICY_EAGER(2, 16, 500);
+		want = p;
+	}
+	assert_int_equal(slab_policy_preset(&got, "eager", 2, 16, 500), 0);
+	assert_policy_equal(&got, &want);
+
+	/* the empty name and NULL resolve to the build default */
+	assert_int_equal(slab_policy_preset(&want, NULL, 2, 16,
+					    SLAB_SHRINK_AFTER_DEFAULT), 0);
+	assert_int_equal(slab_policy_preset(&got, "", 2, 16,
+					    SLAB_SHRINK_AFTER_DEFAULT), 0);
+	assert_policy_equal(&got, &want);
+	assert_int_equal(slab_policy_preset(&got, SLAB_POLICY_DEFAULT_NAME,
+					    2, 16, SLAB_SHRINK_AFTER_DEFAULT), 0);
+	assert_policy_equal(&got, &want);
+
+	/* an unknown name is refused and writes nothing */
+	memset(&got, 0xa5, sizeof(got));
+	memset(&want, 0xa5, sizeof(want));
+	assert_int_equal(slab_policy_preset(&got, "greedy", 2, 16, 500), -1);
+	assert_memory_equal(&got, &want, sizeof(got));
+}
+
+/* And the default is usable as a policy, not merely well-formed. */
+static void
+test_policy_default_runs(void **state)
+{
+	(void)state;
+	struct slab_policy pol = SLAB_POLICY_DEFAULT(0, 8);
+	struct slab vm;
+	void *p;
+
+	assert_int_equal(slab_init(&vm, SLAB_GRAIN_BYTES, &pol), 0);
+	p = slab_alloc(&vm);
+	assert_non_null(p);
+	assert_true(slab_committed(&vm) >= 1);
+	assert_true(slab_committed(&vm) <= slab_policy_max(&vm));
+	slab_free(&vm, p);
+	slab_fini(&vm);
+}
+
+/* ---- the memory is really given back ----------------------------------------- */
+
+#if SLAB_VM_RELEASES
+static u32
+resident_pages(void *base, size_t len)
+{
+	size_t pg = (size_t)sysconf(_SC_PAGESIZE);
+	size_t i, n = (len + pg - 1) / pg;
+	unsigned char *vec = malloc(n);
+	u32 count = 0;
+
+	assert_non_null(vec);
+	assert_int_equal(mincore(base, len, vec), 0);
+	for (i = 0; i < n; i++)
+		count += vec[i] & 1;
+	free(vec);
+	return count;
+}
+
+/*
+ * The policy shrink measured against RSS, not just against the accounting:
+ * after the gc the reclaimed tail has zero resident pages - madvise really
+ * dropped them - while the survivors' blocks are still resident and intact.
+ */
+static void
+test_gc_shrink_returns_pages_to_the_os(void **state)
+{
+	(void)state;
+	struct slab_policy pol = SLAB_POLICY_EAGER(0, 8, 0);
+	struct slab vm;
+	void *live[2] = { NULL, NULL };
+	u8 *base;
+	int i;
+
+	assert_int_equal(slab_init(&vm, SLAB_GRAIN_BYTES, &pol), 0);
+
+	/* commit and dirty all 8 blocks, keep the two lowest-index ones */
+	{
+		void *all[8];
+		for (i = 0; i < 8; i++) {
+			all[i] = slab_alloc(&vm);
+			assert_non_null(all[i]);
+			memset(all[i], 0x33 + slab_index(&vm, all[i]),
+			       slab_block_size(&vm));
+		}
+		for (i = 0; i < 8; i++) {
+			u32 ix = slab_index(&vm, all[i]);
+			if (ix < 2)
+				live[ix] = all[i];
+			else
+				slab_free(&vm, all[i]);
+		}
+	}
+	assert_non_null(live[0]);
+	assert_non_null(live[1]);
+	base = (u8 *)vm.page;
+	assert_true(resident_pages(base, slab_committed_bytes(&vm)) >=
+		    8 * (SLAB_GRAIN_BYTES / CPU_PAGE_SIZE));
+
+	/* 2 of 8 live, dwell 0: one gc returns the six-block tail */
+	assert_int_equal(slab_gc(&vm, 0), -6);
+	assert_int_equal(slab_committed(&vm), 2);
+
+	/* gone from RSS, not just from the accounting */
+	assert_int_equal(resident_pages(base + slab_committed_bytes(&vm),
+					6ull * SLAB_GRAIN_BYTES), 0);
+	assert_true(resident_pages(base, slab_committed_bytes(&vm)) > 0);
+
+	/* the survivors' bytes were never touched by the release */
+	assert_int_equal(((u8 *)live[0])[SLAB_GRAIN_BYTES - 1], 0x33);
+	assert_int_equal(((u8 *)live[1])[SLAB_GRAIN_BYTES - 1], 0x34);
+	slab_fini(&vm);
+}
+#endif /* SLAB_VM_RELEASES */
+
 /* ---- build-time (static) variant ----------------------------------------- */
 
 static void
@@ -778,6 +1043,14 @@ main(void)
 		cmocka_unit_test(test_shrink_half_of_unused),
 		cmocka_unit_test(test_shrink_stops_at_live_block),
 		cmocka_unit_test(test_shrink_keeps_addresses_stable),
+		cmocka_unit_test(test_policy_static),
+		cmocka_unit_test(test_policy_gradual),
+		cmocka_unit_test(test_policy_eager),
+		cmocka_unit_test(test_policy_preset_by_name),
+		cmocka_unit_test(test_policy_default_runs),
+#if SLAB_VM_RELEASES
+		cmocka_unit_test(test_gc_shrink_returns_pages_to_the_os),
+#endif
 		cmocka_unit_test(test_grain_rounds_the_policy),
 		cmocka_unit_test(test_grain_is_one_block_when_block_exceeds_grain),
 		cmocka_unit_test(test_grain_shrink_is_all_or_nothing),
