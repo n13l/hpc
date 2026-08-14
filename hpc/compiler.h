@@ -395,23 +395,38 @@ typedef u32 endian_bitwise wsum;
 	((N) > 8191) + ((N) > 16383) + ((N) > 32767) + ((N) > 65535))
 
 /*
- * A function defined in a header that a build optimizing for size would rather
- * not have at every call site: CC_SZ_DECLARE wraps the definition, and
- * CC_SZ_DEFINE the declaration that goes with it, so the same source serves
- * either build.
+ * A function a header layer defines that a build optimizing for size would
+ * rather have once than at every call site: CC_SZ_DECLARE wraps the definition
+ * in the header, CC_SZ_DEFINE the declaration that goes with it, and the same
+ * source serves either build.
  *
- * Optimizing for size, the definition keeps its own body - noinline, so the
- * calls are calls - and optimizing for speed it is an ordinary static inline.
- * It stays static either way. Giving it external linkage for the size build
- * would put the one definition in whichever object included the header, which
- * for a header-only layer is every object that includes it and a multiple
- * definition at link time; one copy per object that actually uses it costs a
- * few bytes and cannot collide. The declaration is nothing in both builds for
- * the same reason: there is no external symbol to declare.
+ * Optimizing for speed the definition is an ordinary static inline and the
+ * declaration is nothing at all: every object that includes the header carries
+ * the body and calls nothing, which is the whole point of a header-only layer.
+ *
+ * Optimizing for size the definition keeps external linkage and the header is
+ * compiled exactly once - by the one translation unit the module adds to its
+ * Kbuild for that build, which is a .c file whose entire content is the include
+ * (modules/net/tls/hs/derive.c is the pattern). Every other object includes the
+ * module's module.h instead, where CC_SZ_DEFINE is the prototype, and calls the
+ * one definition rather than carrying a copy of it.
+ *
+ * So the two builds differ in what includes the header and not only in how it
+ * compiles, and the module's own headers say so: their cross-layer includes are
+ * the ones guarded by CONFIG_CC_OPTIMIZE_FOR_SIZE. A size build that let a
+ * second object include the header would have the definition twice and would
+ * not link, which is the seam telling the truth rather than a trap - the
+ * alternative, a static copy per object, links either way and quietly gives the
+ * size build the layout it was configured to avoid.
+ *
+ * The linkage is external and the symbol is not otherwise namespaced, so what a
+ * layer hands to CC_SZ_DECLARE belongs in the module's own naming: these are
+ * module-internal functions in the sense that nothing outside the module calls
+ * them, not in the sense that the linker cannot see them.
  */
 #ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
-# define CC_SZ_DECLARE(decl)  static _noinline _unused decl
-# define CC_SZ_DEFINE(decl)   /* nothing */
+# define CC_SZ_DECLARE(decl)  decl
+# define CC_SZ_DEFINE(decl)   decl
 #else
 # define CC_SZ_DECLARE(decl)  static inline decl
 # define CC_SZ_DEFINE(decl)   /* nothing */
