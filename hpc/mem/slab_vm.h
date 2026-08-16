@@ -41,8 +41,10 @@
  * Backends
  * --------
  * default            mmap(MAP_ANON | MAP_NORESERVE), munmap(),
- *                    madvise(MADV_DONTNEED) to release pages
- * -DSLAB_MALLOC_FREE the libc heap, mirroring MEM_MALLOC_FREE in <mem/page.h>
+ *                    madvise(MADV_DONTNEED) to release pages;
+ *                    CONFIG_MEM_SLAB_MMAP
+ * -DSLAB_MALLOC_FREE the libc heap, mirroring MEM_MALLOC_FREE in <mem/page.h>;
+ *                    CONFIG_MEM_SLAB_MALLOC selects the same thing
  * custom             define SLAB_VM_ALLOC/FREE/RELEASE/FAILED yourself - a
  *                    static arena, a freestanding target with no mmap(), a
  *                    shared-memory or hugetlbfs segment
@@ -107,12 +109,24 @@ __BEGIN_DECLS
 #define SLAB_NIL ((u32)~0U)
 #endif
 
+/*
+ * CONFIG_MEM_SLAB_MALLOC is the Kconfig spelling of -DSLAB_MALLOC_FREE, and
+ * nothing more: it selects the same libc-heap backend below. Both are honoured
+ * so a build with no Kconfig, or one file that wants the heap while the rest of
+ * the tree does not, still works by defining the macro itself. A custom
+ * SLAB_VM_ALLOC beats either.
+ */
+#if defined(CONFIG_MEM_SLAB_MALLOC) && !defined(SLAB_MALLOC_FREE)
+#define SLAB_MALLOC_FREE 1
+#endif
+
 #ifndef SLAB_VM_ALLOC
 # ifdef SLAB_MALLOC_FREE
 #  define SLAB_VM_ALLOC(len)        malloc((size_t)(len))
 #  define SLAB_VM_FREE(ptr, len)    ((void)(len), free(ptr))
 #  define SLAB_VM_RELEASE(ptr, len) ((void)(ptr), (void)(len))
 #  define SLAB_VM_FAILED            NULL
+#  define SLAB_VM_RELEASES          0  /* the heap keeps what it was given */
 # else
 #  define SLAB_VM_ALLOC(len) \
 	mmap(NULL, (size_t)(len), VM_PAGE_PROT, VM_PAGE_MODE, -1, 0)
@@ -120,10 +134,28 @@ __BEGIN_DECLS
 #  define SLAB_VM_RELEASE(ptr, len) madvise((ptr), (size_t)(len), MADV_DONTNEED)
 #  define SLAB_VM_FAILED            ((void *)MAP_FAILED)
 #  define SLAB_VM_MMAP              1  /* the madvise() hints below apply */
+#  define SLAB_VM_RELEASES          1  /* MADV_DONTNEED really hands pages back */
 # endif
 #endif
 #ifndef SLAB_VM_FAILED
 #define SLAB_VM_FAILED NULL
+#endif
+
+/*
+ * Does SLAB_VM_RELEASE actually hand memory back to the host?
+ *
+ * Only the backend knows, and the answer is not cosmetic: where it is 0 a
+ * shrink still drops blocks and rebuilds the free list but RSS does not move,
+ * and a released range keeps its old contents instead of reading back as
+ * zeroes. Code that means "the memory is gone now" has to ask, which is what
+ * this is for - the slab itself never needs to, since it releases either way.
+ *
+ * The default for a custom backend is 0, the conservative answer: assume
+ * nothing came back unless the backend says otherwise. A custom backend that
+ * does release defines SLAB_VM_RELEASES 1 alongside its hooks.
+ */
+#ifndef SLAB_VM_RELEASES
+#define SLAB_VM_RELEASES 0
 #endif
 
 #ifndef SLAB_MEM_CALLOC

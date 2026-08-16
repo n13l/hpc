@@ -137,60 +137,12 @@ config SECTION
 	  parsed. If unsure, say Y.
 
 #
-# Memory options. These are kernel hints the slab allocators pass to madvise()
-# over their reservation; both are off by default because both trade memory for
-# speed, and neither is a win for every block size or workload. Where the
-# reservation itself comes from is a separate, source-level choice - the
-# SLAB_VM_* hooks in <mem/slab_vm.h> - not a Kconfig symbol, because a custom
-# allocator has to be named by the code that supplies it.
+# Memory options — the slab reservation backend and the two madvise() hints
+# over it. Kept in their own file (Kconfig.mem) so a tree that embeds this
+# package sources the same definitions instead of keeping a copy of them in
+# step by hand.
 #
-
-config MEM_HUGEPAGE
-	bool "Back slab reservations with transparent huge pages"
-	help
-	  Ask for MADV_HUGEPAGE over each slab reservation, so the kernel backs
-	  it with 2 MB pages where it can. The point is TLB reach: a slab large
-	  enough to be randomly accessed across gigabytes spends real time on TLB
-	  misses that huge pages avoid.
-
-	  The cost is granularity, and it is not subtle. A huge page is faulted,
-	  and released, 2 MB at a time, so this also makes 2 MB the slab's release
-	  grain: min, max and grow_step are rounded up to a whole 2 MB, and a slab
-	  can no longer shrink below it. A policy asking for a 64 block minimum of
-	  2048 byte blocks gets 1024 blocks - 2 MB - because that is what the
-	  kernel will fault in either way, and the block counts the slab reports
-	  are meant to mean the memory it is holding. Read the rounded policy back
-	  with slab_policy_min()/slab_policy_max().
-
-	  So: worth it for a slab that stays large and hot, where TLB reach is the
-	  cost that matters. Wrong for many small slabs, which it would round up
-	  to 2 MB apiece.
-
-	  Requires transparent_hugepage=madvise or always. Where the kernel cannot
-	  honour it the hint fails and is ignored - but the rounding still applies,
-	  because it is a build-time decision.
-
-	  If unsure, say N.
-
-config MEM_POPULATE
-	bool "Pre-fault slab blocks when committing them"
-	help
-	  Ask for MADV_POPULATE_WRITE over the blocks each grow step commits, so
-	  one syscall faults the range instead of taking a page fault per page.
-
-	  This applies only where a block is no larger than a page, and is
-	  compiled out entirely otherwise. Committing a block writes a free-list
-	  node into it, which for a sub-page block already touches every page in
-	  the range - that is the fault-per-page this replaces, measured about
-	  1.7x cheaper for a 2048 byte block. A block spanning several pages is
-	  the opposite case: the node write touches only its first page, so
-	  pre-faulting the rest commits memory the caller may never touch and
-	  measures slower.
-
-	  Needs Linux 5.14 or newer. On an older kernel the hint fails and blocks
-	  are faulted lazily as before.
-
-	  If unsure, say N.
+source "Kconfig.mem"
 
 endmenu
 

@@ -167,9 +167,20 @@ test_shrink_retires_then_releases(void **state)
 	assert_int_equal(slab_rcu_stat(&r)->releases, 1);
 	assert_int_equal(slab_rcu_stat(&r)->blocks_released, 4);
 
-	/* and now the pages really are gone: they read back as zeroes */
-	for (i = 4; i < 8; i++)
-		assert_false(stamp_valid(slab_at(slab_rcu_slab(&r), i)));
+	/*
+	 * And now the pages really are gone: they read back as zeroes. That is
+	 * a property of a backend whose release releases (SLAB_VM_RELEASES) -
+	 * madvise(MADV_DONTNEED) over an anonymous mapping. On the libc heap
+	 * SLAB_VM_RELEASE is a no-op, so the assertion to make is the opposite
+	 * one: the bookkeeping above happened all the same, and the memory is
+	 * still there with its stamps intact.
+	 */
+	for (i = 4; i < 8; i++) {
+		if (SLAB_VM_RELEASES)
+			assert_false(stamp_valid(slab_at(slab_rcu_slab(&r), i)));
+		else
+			assert_true(stamp_valid(slab_at(slab_rcu_slab(&r), i)));
+	}
 
 	slab_rcu_fini(&r);
 }

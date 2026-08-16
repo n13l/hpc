@@ -1,0 +1,128 @@
+#
+# Memory options — where a slab's one contiguous reservation comes from, and
+# the two kernel hints laid over it. They belong to this package, and this file
+# is the single place they are defined: hpc's own Kconfig sources it into
+# "Library options", and a tree that embeds hpc (un) sources the same file
+# rather than keeping a copy in step by hand.
+#
+# The file carries no menu of its own so each package can place these where its
+# own menu structure wants them.
+#
+
+choice
+	prompt "Slab reservation backend"
+	default MEM_SLAB_MMAP
+	help
+	  How the slab allocators in <mem/slab.h> and <mem/slab_class.h> obtain
+	  the single contiguous reservation they hand blocks out of. Both ask
+	  the host for the same three things - reserve @len bytes once, give
+	  them back, and hand the physical pages of a range back while keeping
+	  the addresses mapped - and this picks who answers.
+
+	  It is a build-time choice because the reservation is sized once at
+	  init and never resized: that is what keeps a block's address stable
+	  for the lifetime of the slab. For the same reason there is no
+	  realloc() backend and cannot be one - realloc() may move the
+	  reservation, and a move invalidates every block pointer a caller is
+	  holding. A slab that can be reallocated is a different data structure
+	  with a different contract (index-only access, no raw pointers held
+	  across a grow).
+
+	  Neither choice here is the last word: the SLAB_VM_* hooks in
+	  <mem/slab_vm.h> still take a custom backend - a static arena, a
+	  hugetlbfs or shared-memory segment, a freestanding target with no
+	  mmap() at all - and a definition supplied by the code that wants it
+	  wins over both of these.
+
+config MEM_SLAB_MMAP
+	bool "mmap() anonymous mapping"
+	help
+	  Reserve with mmap(MAP_ANON | MAP_NORESERVE), release with munmap(),
+	  and hand pages back on shrink with madvise(MADV_DONTNEED), which
+	  keeps the addresses mapped while the memory returns to the host.
+
+	  This is the backend the slab was written for and the only one that
+	  gives memory back: a shrink that drops blocks actually lowers RSS.
+	  It is also the only one the two hints below apply to, since they are
+	  madvise() calls over the mapping.
+
+	  One property worth naming because code comes to depend on it without
+	  meaning to: a fresh anonymous mapping reads as zeroes. The slab does
+	  not rely on that - its bitmap and cache entries come zeroed from
+	  SLAB_MEM_CALLOC and a block is payload the caller initialises - but a
+	  caller that grew up here and quietly assumed a zeroed block will not
+	  survive a switch to the heap.
+
+config MEM_SLAB_MALLOC
+	bool "malloc()/free() (libc heap)"
+	help
+	  Reserve with malloc() and release with free(), the same backend
+	  -DSLAB_MALLOC_FREE has always selected by hand. For a target where
+	  mmap() is unavailable or unwanted, and for a build whose allocator is
+	  the thing being instrumented - valgrind, an ASan/heap profiler, an
+	  embedded libc with its own arena - where a slab that reserves behind
+	  the allocator's back is invisible to the tool.
+
+	  What it gives up is releasing memory. The heap has no equivalent of
+	  madvise(MADV_DONTNEED) over part of a live allocation, so
+	  SLAB_VM_RELEASE is a no-op: shrink still drops blocks from the
+	  committed prefix and rebuilds the free list, the block counts still
+	  move, and the process gives nothing back - RSS stays at its
+	  high-water mark for the life of the slab. Everything else behaves the
+	  same, and the slab unit tests pass on it.
+
+	  Two smaller differences: heap memory is not zeroed (see above), and
+	  the release grain drops to a page since neither madvise() hint
+	  applies, which is the same grain an mmap build without MEM_HUGEPAGE
+	  uses.
+
+endchoice
+
+config MEM_HUGEPAGE
+	bool "Back slab reservations with transparent huge pages"
+	depends on MEM_SLAB_MMAP
+	help
+	  Ask for MADV_HUGEPAGE over each slab reservation, so the kernel backs
+	  it with 2 MB pages where it can. The point is TLB reach: a slab large
+	  enough to be randomly accessed across gigabytes spends real time on TLB
+	  misses that huge pages avoid.
+
+	  The cost is granularity, and it is not subtle. A huge page is faulted,
+	  and released, 2 MB at a time, so this also makes 2 MB the slab's release
+	  grain: min, max and grow_step are rounded up to a whole 2 MB, and a slab
+	  can no longer shrink below it. A policy asking for a 64 block minimum of
+	  2048 byte blocks gets 1024 blocks - 2 MB - because that is what the
+	  kernel will fault in either way, and the block counts the slab reports
+	  are meant to mean the memory it is holding. Read the rounded policy back
+	  with slab_policy_min()/slab_policy_max().
+
+	  So: worth it for a slab that stays large and hot, where TLB reach is the
+	  cost that matters. Wrong for many small slabs, which it would round up
+	  to 2 MB apiece.
+
+	  Requires transparent_hugepage=madvise or always. Where the kernel cannot
+	  honour it the hint fails and is ignored - but the rounding still applies,
+	  because it is a build-time decision.
+
+	  If unsure, say N.
+
+config MEM_POPULATE
+	bool "Pre-fault slab blocks when committing them"
+	depends on MEM_SLAB_MMAP
+	help
+	  Ask for MADV_POPULATE_WRITE over the blocks each grow step commits, so
+	  one syscall faults the range instead of taking a page fault per page.
+
+	  This applies only where a block is no larger than a page, and is
+	  compiled out entirely otherwise. Committing a block writes a free-list
+	  node into it, which for a sub-page block already touches every page in
+	  the range - that is the fault-per-page this replaces, measured about
+	  1.7x cheaper for a 2048 byte block. A block spanning several pages is
+	  the opposite case: the node write touches only its first page, so
+	  pre-faulting the rest commits memory the caller may never touch and
+	  measures slower.
+
+	  Needs Linux 5.14 or newer. On an older kernel the hint fails and blocks
+	  are faulted lazily as before.
+
+	  If unsure, say N.
