@@ -455,6 +455,38 @@ int conf_handle_help(struct conf_ctx *ctx, const struct conf_attr *attr,
 
 /*** Sections ***/
 
+/**
+ * One attribute, as something to show a reader: where it lives, what it holds
+ * now, and what its declaration says about it. Every pointer is either the
+ * declaration's own string - which outlives the walk - or, for @value, a buffer
+ * belonging to the caller.
+ *
+ * Declared whether or not CONFIG_SECTION is on, like the rest of this API: a
+ * program that reports its own configuration still compiles without sections,
+ * it simply has nothing to report (conf_walk() below).
+ */
+struct conf_desc {
+	const char *section;		/* namespace, "net.tls"; NULL if unnamed */
+	const char *sechelp;		/* the section's headline in --help      */
+	const char *name;		/* attribute name, "record-max"          */
+	const char *arg;		/* metavar: "BYTES", "0|1", NULL         */
+	const char *help;		/* description; may hold newlines        */
+	const char *value;		/* what it holds now, rendered           */
+	const char * const *lookup;	/* CONF_T_LOOKUP's names, else NULL      */
+	int letter;			/* short option, 0 for none              */
+	unsigned int flags;		/* the CONF_* the declaration carries    */
+	unsigned int count;		/* times it has been given               */
+	int runtime;			/* declared CONF_RUNTIME                 */
+	int settable;			/* would a change be accepted right now  */
+	int readable;			/* @value is a value, not an empty string */
+};
+
+/**
+ * Called once per attribute by conf_walk(), in registration order. Return
+ * anything but 0 to stop the walk; conf_walk() hands that value back.
+ */
+typedef int conf_visitor(const struct conf_desc *desc, void *arg);
+
 #ifdef CONFIG_SECTION
 
 /**
@@ -485,6 +517,40 @@ int conf_load(struct conf_ctx *ctx, const char *path);
 
 /** Write every attribute as "<section>.<attribute> <value>", in that syntax. */
 void conf_dump(struct conf_ctx *ctx, FILE *f);
+
+/*** Reading the configuration back ***/
+
+/**
+ * Show @fn every attribute whose name @prefix selects, or every attribute when
+ * @prefix is NULL. A prefix may be a whole name ("net.tls.record-max"), a
+ * section ("net.tls"), or a stem of one ("net", which selects net.tls and
+ * net.tcp alike). Returns CONF_OK, or whatever a visitor stopped with.
+ *
+ * This is the introspection half of the namespace: conf_set() reaches one
+ * attribute by name, and this is how a program says what names there are - a
+ * running daemon answering "what can I be asked", a --help that is a table
+ * rather than prose, a report of what is in force beside what it means.
+ */
+int conf_walk(struct conf_ctx *ctx, const char *prefix, conf_visitor *fn,
+              void *arg);
+
+/**
+ * One attribute by name, in the spelling conf_set() takes - qualified, or bare
+ * where that is unambiguous. @buf is where the rendered value is put and must
+ * outlive @desc. Returns CONF_OK, CONF_UNKNOWN if there is no such attribute,
+ * or CONF_ERROR when the name is ambiguous.
+ */
+int conf_describe(struct conf_ctx *ctx, const char *name, struct conf_desc *desc,
+                  char *buf, size_t size);
+
+/**
+ * The value alone, rendered into @buf the way conf_dump() would write it (a
+ * string unquoted, a lookup by name, a boolean as yes/no). Returns CONF_OK,
+ * CONF_UNKNOWN for no such attribute, or CONF_ERROR for an ambiguous name or an
+ * attribute with no value behind it - a handler's, whose effect went somewhere
+ * this cannot see.
+ */
+int conf_value(struct conf_ctx *ctx, const char *name, char *buf, size_t size);
 
 int conf_handle_set(struct conf_ctx *ctx, const struct conf_attr *attr,
                     const char *value, void *data);
@@ -520,6 +586,33 @@ static inline void
 conf_dump(struct conf_ctx *ctx, FILE *f)
 {
 	(void)ctx; (void)f;
+}
+
+/*
+ * There are no names in the binary to walk and no descriptions to walk them
+ * with, so the walk visits nothing and says so. A caller that prints a table of
+ * its configuration prints an empty one rather than being written twice.
+ */
+static inline int
+conf_walk(struct conf_ctx *ctx, const char *prefix, conf_visitor *fn, void *arg)
+{
+	(void)ctx; (void)prefix; (void)fn; (void)arg;
+	return CONF_UNKNOWN;
+}
+
+static inline int
+conf_describe(struct conf_ctx *ctx, const char *name, struct conf_desc *desc,
+              char *buf, size_t size)
+{
+	(void)ctx; (void)name; (void)desc; (void)buf; (void)size;
+	return CONF_UNKNOWN;
+}
+
+static inline int
+conf_value(struct conf_ctx *ctx, const char *name, char *buf, size_t size)
+{
+	(void)ctx; (void)name; (void)buf; (void)size;
+	return CONF_UNKNOWN;
 }
 
 #endif /* CONFIG_SECTION */

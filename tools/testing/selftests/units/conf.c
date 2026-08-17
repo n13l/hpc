@@ -586,6 +586,149 @@ test_help_has_sections(void **state)
 	conf_free(ctx);
 }
 
+/*
+ * The other direction of the namespace: what the names are, and what each of
+ * them says about itself. A program that can be told `set net.backlog 256` is
+ * expected to be able to answer "what else is there" without its source.
+ */
+struct visit {
+	unsigned int	n;
+	char		seen[512];	/* "sec.attr=value " per attribute */
+	int		runtime;	/* of the last one visited         */
+	int		settable;
+	const char	*help;
+	const char	*arg;
+};
+
+static int
+visitor(const struct conf_desc *d, void *arg)
+{
+	struct visit *v = arg;
+	size_t len = strlen(v->seen);
+
+	snprintf(v->seen + len, sizeof(v->seen) - len, "%s.%s=%s ",
+	         d->section, d->name, d->value);
+	v->runtime = d->runtime;
+	v->settable = d->settable;
+	v->help = d->help;
+	v->arg = d->arg;
+	v->n++;
+	return 0;
+}
+
+static void
+test_walk_all(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct visit v;
+	char *argv[] = { "t", "--backlog", "256", "--listen", "1.2.3.4", NULL };
+
+	assert_int_equal(run(ctx, argv), 5);
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, NULL, visitor, &v), CONF_OK);
+
+	/* every attribute of every section, values and all */
+	assert_true(v.n >= 10);
+	assert_non_null(strstr(v.seen, "net.backlog=256 "));
+	assert_non_null(strstr(v.seen, "net.listen=1.2.3.4 "));
+	assert_non_null(strstr(v.seen, "log.level=error "));
+	assert_non_null(strstr(v.seen, "log.daemon=no "));
+	conf_free(ctx);
+}
+
+/* A prefix is a whole name, a section, or a stem of one. */
+static void
+test_walk_prefix(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct visit v;
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 4);
+	assert_null(strstr(v.seen, "log."));
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net.backlog", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 1);
+	assert_non_null(strstr(v.seen, "net.backlog="));
+
+	/* a bare attribute name, the spelling conf_set() also takes */
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "timeout", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 1);
+
+	/* and one that names nothing visits nothing, which is not an error */
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "nosuch", visitor, &v), CONF_OK);
+	assert_int_equal(v.n, 0);
+	conf_free(ctx);
+}
+
+/* What a walk reports about one attribute is what was declared about it — and
+ * @settable is the question an operator is actually asking, so it follows
+ * conf_running() while @runtime stays the declaration's own word. */
+static void
+test_walk_reports_the_declaration(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct visit v;
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net.backlog", visitor, &v), CONF_OK);
+	assert_string_equal(v.help, "Listen backlog");
+	assert_string_equal(v.arg, "N");
+	assert_false(v.runtime);
+	assert_true(v.settable);	/* startup is not over yet */
+
+	conf_running(ctx, 1);
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "net.backlog", visitor, &v), CONF_OK);
+	assert_false(v.runtime);
+	assert_false(v.settable);	/* and now it would be refused */
+
+	memset(&v, 0, sizeof(v));
+	assert_int_equal(conf_walk(ctx, "log.timeout", visitor, &v), CONF_OK);
+	assert_true(v.runtime);
+	assert_true(v.settable);
+	conf_free(ctx);
+}
+
+static void
+test_describe_and_value(void **state)
+{
+	(void)state;
+	struct conf_ctx *ctx = setup();
+	struct conf_desc d;
+	char buf[128], val[128];
+
+	assert_int_equal(conf_set(ctx, "net.backlog", "512"), CONF_OK);
+
+	assert_int_equal(conf_describe(ctx, "net.backlog", &d, buf, sizeof(buf)),
+	                 CONF_OK);
+	assert_string_equal(d.section, "net");
+	assert_string_equal(d.name, "backlog");
+	assert_string_equal(d.value, "512");
+	assert_string_equal(d.help, "Listen backlog");
+	assert_true(d.readable);
+
+	/* the bare spelling reaches it too, and the value alone comes back
+	 * without a description to go with it */
+	assert_int_equal(conf_value(ctx, "backlog", val, sizeof(val)), CONF_OK);
+	assert_string_equal(val, "512");
+
+	assert_int_equal(conf_value(ctx, "nosuch", val, sizeof(val)),
+	                 CONF_UNKNOWN);
+	assert_int_equal(conf_describe(ctx, "nosuch", &d, buf, sizeof(buf)),
+	                 CONF_UNKNOWN);
+	conf_free(ctx);
+}
+
 #else /* !CONFIG_SECTION */
 
 /* The section entry points are stubs, and say so rather than pretending. */
@@ -666,6 +809,10 @@ main(void)
 		cmocka_unit_test(test_config_file_errors),
 		cmocka_unit_test(test_dump_round_trip),
 		cmocka_unit_test(test_help_has_sections),
+		cmocka_unit_test(test_walk_all),
+		cmocka_unit_test(test_walk_prefix),
+		cmocka_unit_test(test_walk_reports_the_declaration),
+		cmocka_unit_test(test_describe_and_value),
 #else
 		cmocka_unit_test(test_section_api_is_stubbed),
 		cmocka_unit_test(test_section_options_are_gone),
