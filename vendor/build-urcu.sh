@@ -128,6 +128,23 @@ if [ "$CONFIG_CC_OPTIMIZE" = "y" ]; then
 fi
 [ "$CONFIG_DEBUG_INFO" = "y" ] && URCU_CFLAGS="$URCU_CFLAGS -g"
 
+# aarch64: by default gcc emits the outline atomics, which call libgcc's
+# __aarch64_*() helpers, and those pull in its lse-init.o -- a constructor that
+# reads the LSE bit out of the auxiliary vector with __getauxval(), a C library
+# symbol. These archives are linked into binaries that carry no C library at all
+# (un's tools/ub links -nostdlib), so nothing resolves it and the program dies
+# with a symbol lookup error the first time a urcu compare-and-swap runs. The
+# tree's own objects are compiled the same way for the same reason; see
+# vendor/kbuild/arch/arm64/Makefile.
+case "$(${CC:-cc} -dumpmachine 2>/dev/null)" in
+aarch64*)
+	if echo | ${CC:-cc} -mno-outline-atomics -x c -c - -o /dev/null \
+		>/dev/null 2>&1; then
+		URCU_CFLAGS="$URCU_CFLAGS -mno-outline-atomics"
+	fi
+	;;
+esac
+
 # Cross build: hand liburcu the same toolchain kbuild uses, so its configure
 # tests run against the target compiler rather than the build one.
 if [ -n "$CROSS_COMPILE" ]; then
