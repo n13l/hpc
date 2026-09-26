@@ -15,14 +15,14 @@
 #include <mem/stack.h>
 #include <sys/time.h>
 
-#include <arch/os/linux/io/str.h>
+#include <arch/os/str.h>
 
 #include <unistd.h>
 #include <sys/syscall.h>
 
-#ifdef CONFIG_OS_LINUX_IO
+#ifdef CONFIG_OS_IO
 
-#include <arch/os/linux/io/io.h>
+#include <arch/os/io.h>
 
 #define log_sys_open(path, flags, mode)	_sys_open((path), (flags), (mode))
 #define log_sys_write(fd, buf, len)	_sys_write((fd), (buf), (len))
@@ -34,12 +34,12 @@
 
 static inline unsigned int compat_gettid(void)
 {
-	return (unsigned int)_syscall0(SYS_gettid);
+	return (unsigned int)_sys_gettid();
 }
 
 static inline void log_sys_now(struct timeval *tv)
 {
-	_syscall2(SYS_gettimeofday, tv, 0);
+	_sys_gettimeofday(tv);
 }
 
 static inline void log_sys_die(const char *file, int err)
@@ -62,23 +62,34 @@ static inline void log_sys_die(const char *file, int err)
 #define log_sys_stdout			fileno(stdout)
 #define log_sys_stderr			fileno(stderr)
 
-#ifdef SYS_gettid
+/*
+ * The thread id through the C library, which is where this half of the file
+ * gets everything.
+ *
+ * __APPLE__ is asked first and not last, and that ordering is the whole of what
+ * is interesting here. Darwin's <sys/syscall.h> does define SYS_gettid, so the
+ * #ifdef below would be taken on macOS — but call 286 there reads the calling
+ * thread's effective uid and gid and has nothing to do with a thread
+ * identifier. pthread_threadid_np(3) is the one that does, and it is the same
+ * number gettid(2) returns on Linux: the kernel's, stable for the life of the
+ * thread, and not an address the way pthread_self() is.
+ */
+#ifdef __APPLE__
+#include <pthread.h>
+static inline unsigned int compat_gettid(void)
+{
+	uint64_t tid = 0;
+
+	pthread_threadid_np(NULL, &tid);
+	return (unsigned int)tid;
+}
+#elif defined(SYS_gettid)
 static inline unsigned int compat_gettid(void)
 { 
 	return (unsigned int) syscall(SYS_gettid);
 }
-#elif __APPLE__
-#if TARGET_OS_IPHONE && TARGET_IPHONE_SIMULATOR
-#elif TARGET_OS_IPHONE
 #else
-#define TARGET_OS_OSX 1
-static inline unsigned int compat_gettid(void)
-{
-	return (unsigned int)pthread_self();
-}
-#endif
-#else
-#error "SYS_gettid unavailable on this system"
+#error "no way to ask this system for a thread id"
 #endif
 
 static inline void log_sys_now(struct timeval *tv)

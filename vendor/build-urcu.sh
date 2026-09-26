@@ -145,6 +145,20 @@ aarch64*)
 	;;
 esac
 
+# The ABI the consuming tree builds for, when it names one. A tree that does
+# exports VENDOR_ABI_FLAGS from its top-level Makefile, which is read before
+# the vendor-prepare step this script runs in; everything a Kbuild says with
+# subdir-ccflags-y is settled far too late to reach a vendored sub-build.
+#
+# macOS/arm64 is the case that has one: un's ub tree builds every object -arch
+# arm64e, because the agent dylib has to load into an arm64e shell, and Mach-O
+# does not mix the two. An arm64 archive on an arm64e link is not an error --
+# ld drops it with a warning ("found architecture 'arm64', required
+# architecture 'arm64e'") and the failure arrives as every urcu symbol the
+# tree calls coming back undefined. Empty for every tree and platform that
+# names no ABI, which configures liburcu exactly as before.
+[ -n "$VENDOR_ABI_FLAGS" ] && URCU_CFLAGS="$URCU_CFLAGS $VENDOR_ABI_FLAGS"
+
 # Cross build: hand liburcu the same toolchain kbuild uses, so its configure
 # tests run against the target compiler rather than the build one.
 if [ -n "$CROSS_COMPILE" ]; then
@@ -153,12 +167,36 @@ fi
 
 mkdir -p "$URCU_OUT"
 
+# Everything the configure below is made of, in one line. It is recorded in the
+# stamp and compared against it, rather than the stamp being a bare timestamp:
+# the ABI above does not come from the configuration, so a tree can change the
+# architecture it builds for with auto.conf untouched, and a timestamp would
+# then keep archives of the architecture that is no longer the one. Comparing
+# the recipe catches that, and catches a CC or a flavour changed the same way.
+urcu_recipe="CC=${CC:-cc} ARGS=$URCU_ARGS CFLAGS=$URCU_CFLAGS"
+
 # Reconfigure when the kbuild configuration changed (flavour, optimisation,
-# toolchain); otherwise reuse the build directory as it stands.
+# toolchain) or when the recipe did; otherwise reuse the build directory as it
+# stands.
 configured="$URCU_OUT/.configured"
 if [ ! -f "$URCU_OUT/Makefile" ] || [ ! -f "$configured" ] \
-	|| [ "$autoconf" -nt "$configured" ]; then
+	|| [ "$autoconf" -nt "$configured" ] \
+	|| [ "$(cat "$configured" 2>/dev/null)" != "$urcu_recipe" ]; then
 	echo "  CONFIG  vendor/userspace-rcu ($flavour)"
+	# Start the build directory over. Reconfiguring in place regenerates what
+	# configure owns and nothing else: the .o and .a from the previous recipe
+	# stay, they are newer than their sources, and make keeps every one of them
+	# -- compiled for the flavour or the ABI that is no longer wanted. The
+	# directory is wholly generated (it is under $objtree), so removing it
+	# costs only the rebuild that is due anyway. The guard is for the in-tree
+	# build where $objtree is $srctree and this path IS the submodule: there,
+	# ask liburcu's own Makefile to clean instead.
+	if [ "$URCU_OUT" != "$URCU_SRC" ]; then
+		rm -rf "$URCU_OUT"
+		mkdir -p "$URCU_OUT"
+	elif [ -f "$URCU_OUT/Makefile" ]; then
+		urcu_make -C "$URCU_OUT" distclean >/dev/null 2>&1 || true
+	fi
 	configure_urcu() {
 		(cd "$URCU_OUT" && env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS \
 			"$URCU_SRC/configure" --prefix="$URCU_PREFIX" $URCU_ARGS \
@@ -173,7 +211,7 @@ if [ ! -f "$URCU_OUT/Makefile" ] || [ ! -f "$configured" ] \
 			exit 1
 		}
 	fi
-	touch "$configured"
+	printf '%s\n' "$urcu_recipe" > "$configured"
 fi
 
 # --- build and stage ------------------------------------------------------- #

@@ -613,10 +613,20 @@ measure_lookup(const measure_metric *meta, u64 *values, unsigned count,
 #define measure_ptr(_ns, _name)
 #define measure_inc(_m, _ev)            ((void)0)
 #define measure_dec(_m, _ev)            ((void)0)
-#define measure_add(_m, _ev, _n)        ((void)0)
-#define measure_sub(_m, _ev, _n)        ((void)0)
-#define measure_set(_m, _ev, _v)        ((void)0)
-#define measure_inc_if(_m, _cond, _ev)  ((void)0)
+/*
+ * @_n, @_v and @_cond are discarded, not dropped, for the reason @_off is
+ * below: each is an expression the caller built for this call and for nothing
+ * else - a running total, a flag word ORed together over a loop - and dropping
+ * it unread is the compiler telling the caller so, as
+ * -Wunused-but-set-variable on the local that held it. Reading and throwing
+ * the value away answers that and costs nothing, the read being dead from
+ * there; it also keeps the two configurations agreeing on what gets evaluated,
+ * since a CONFIG_MEASURE build evaluates all three.
+ */
+#define measure_add(_m, _ev, _n)        ((void)(_n))
+#define measure_sub(_m, _ev, _n)        ((void)(_n))
+#define measure_set(_m, _ev, _v)        ((void)(_v))
+#define measure_inc_if(_m, _cond, _ev)  ((void)(_cond))
 /*
  * @_off is discarded, not dropped: it is an ordinary expression - typically a
  * lookup in a table of offsetof()s - and a table whose only reader vanished
