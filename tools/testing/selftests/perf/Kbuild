@@ -1,4 +1,5 @@
 # hpc performance selftests / benchmarks.
-testprogs-y := sort_merge
+testprogs-y := sort_merge sort_intro
 TEST_CFLAGS = -I$(srctree)/hpc
 LIBS_sort_merge = hpc/built-in.o -lm
+LIBS_sort_intro = hpc/built-in.o -lm
