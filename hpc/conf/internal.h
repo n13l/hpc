@@ -73,7 +73,7 @@ struct conf_ctx {
 void *conf_alloc_mem(struct conf_ctx *ctx, size_t size);
 char *conf_alloc_str(struct conf_ctx *ctx, const char *str, size_t len);
 char *conf_printf(struct conf_ctx *ctx, const char *fmt, ...)
-	_format_check(printf, 2, 3);
+	_format_check(__printf__, 2, 3);
 char *conf_vprintf(struct conf_ctx *ctx, const char *fmt, va_list args);
 
 /* Build the getopt_long() tables if they are not built yet. Cannot fail:

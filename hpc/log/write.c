@@ -18,7 +18,19 @@
 #include <arch/os/str.h>
 
 #include <unistd.h>
+#ifndef _WIN32
 #include <sys/syscall.h>
+#endif
+
+/*
+ * A log file is bytes. msvcrt opens a file in text mode unless told otherwise,
+ * and text mode writes every \n as \r\n — which makes the size the header
+ * accounted for wrong, and a log written on Windows a different file from the
+ * same log written anywhere else. O_BINARY is msvcrt's, and nothing elsewhere.
+ */
+#ifndef O_BINARY
+#define O_BINARY	0
+#endif
 
 #ifdef CONFIG_OS_IO
 
@@ -87,6 +99,17 @@ static inline unsigned int compat_gettid(void)
 static inline unsigned int compat_gettid(void)
 { 
 	return (unsigned int) syscall(SYS_gettid);
+}
+#elif defined(_WIN32)
+/*
+ * GetCurrentThreadId(): the kernel's thread id, unique across the system for as
+ * long as the thread lives — the same kind of number as gettid(2), and not the
+ * pseudo-handle GetCurrentThread() returns.
+ */
+#include <windows.h>
+static inline unsigned int compat_gettid(void)
+{
+	return (unsigned int)GetCurrentThreadId();
 }
 #else
 #error "no way to ask this system for a thread id"
@@ -184,10 +207,11 @@ log_open(const char *file)
 		long fd;
 
 		if (log_append)
-			fd = log_sys_open(file, O_APPEND | O_RDWR, 0644);
-		else
-			fd = log_sys_open(file, O_CREAT | O_RDWR | O_TRUNC,
+			fd = log_sys_open(file, O_APPEND | O_RDWR | O_BINARY,
 			                  0644);
+		else
+			fd = log_sys_open(file, O_CREAT | O_RDWR | O_TRUNC |
+			                  O_BINARY, 0644);
 
 		if (fd >= 0) {
 			log_fd = (int)fd;
@@ -246,7 +270,7 @@ do_log_cap_timestamp(struct log_ctx *c)
 	c->usec = now.tv_usec;
 }
 
-static int __attribute__((format(printf, 4, 5)))
+static int __attribute__((format(__printf__, 4, 5)))
 hdr_addf(char *msg, int sz, int cap, const char *fmt, ...)
 {
 	int rem = cap - sz, n;
